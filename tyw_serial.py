@@ -1,220 +1,60 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 王舒 (修改：增强版)
+@Author     : 架构修改
 @Company    : 黑龙江天有为科技有限公司
-@Date       : 2025-05-09 (修改：2025-05-10)
-@Version    : 1.2.0
+@Date       : 2025-05-10
 @Python     : 3.10
-依赖库:
-    - pyserial PyQt5
-
-增强功能：
-    - 支持多条报文同时定时发送
-    - 每条报文可设置独立的发送周期
-    - 解决同时发送的冲突问题
-    - 统一的日志显示区域，同时显示发送/接收/系统日志
-    - 可选择是否显示十六进制内容
+@Description: 主程序入口，整合所有功能模块
 """
+
 import sys
 import os
 import time
-import configparser
-import importlib.util
-from collections import deque
+import json
 from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QComboBox, QPushButton, QTextEdit, QLineEdit,
                              QGridLayout, QGroupBox, QCheckBox, QSpinBox, QSplitter,
                              QTabWidget, QFileDialog, QMessageBox, QStatusBar, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QAbstractItemView, QDialog,
-                             QFormLayout, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QMutex, QObject
-from PyQt5.QtGui import QTextCursor, QColor, QBrush, QTextCharFormat, QFont
+                             QTableWidgetItem, QHeaderView, QAbstractItemView, QDialog)
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QBrush, QTextCharFormat, QFont, QIcon
 import serial
 import serial.tools.list_ports
-import json
+
+# 导入自定义模块
+from config_parser import ConfigParser
+from protocol_ui_generator import ProtocolUIGenerator
+from protocol_parser import ProtocolParser
+from message_transceiver import MessageSender, MessageReceiver, TimedMessage
 
 
-class MessageSender(QObject):
-    """报文发送管理器"""
+class SerialReceiveThread(QThread):
+    """串口接收线程"""
+    receive_signal = pyqtSignal(bytes)
 
-    message_sent = pyqtSignal(bytes)  # 报文发送完成信号
-
-    def __init__(self):
+    def __init__(self, serial_port):
         super().__init__()
-        self.queue = deque()
-        self.mutex = QMutex()
-        self.processing = False
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.process_queue)
-        self.timer.setInterval(10)
-        self.serial = None
+        self.serial = serial_port
+        self.is_running = True
 
-    def set_serial(self, serial):
-        """设置串口对象"""
-        self.serial = serial
+    def run(self):
+        while self.is_running and self.serial and self.serial.isOpen():
+            try:
+                # 检查是否有可读取的数据
+                if self.serial.in_waiting:
+                    data = self.serial.read(self.serial.in_waiting)
+                    if data:
+                        self.receive_signal.emit(data)
+            except Exception as e:
+                print(f"接收数据错误: {str(e)}")
 
-        # 如果串口已关闭，停止定时器
-        if not serial or not serial.isOpen():
-            self.timer.stop()
-            self.queue.clear()
-            self.processing = False
+            # 防止CPU占用过高
+            self.msleep(10)
 
-    def add_message(self, message):
-        """添加报文到发送队列"""
-        if not self.serial or not self.serial.isOpen():
-            return False
-
-        self.mutex.lock()
-        self.queue.append(message)
-        self.mutex.unlock()
-
-        # 如果定时器未启动，启动定时器
-        if not self.timer.isActive():
-            self.timer.start()
-
-        return True
-
-    def process_queue(self):
-        """处理报文发送队列"""
-        if self.processing or not self.serial or not self.serial.isOpen():
-            return
-
-        self.mutex.lock()
-        if not self.queue:
-            self.mutex.unlock()
-            self.timer.stop()
-            return
-
-        self.processing = True
-        message = self.queue.popleft()
-        self.mutex.unlock()
-
-        try:
-            # 发送报文
-            self.serial.write(message)
-
-            # 发送完成信号
-            self.message_sent.emit(message)
-        except Exception as e:
-            print(f"发送报文失败: {str(e)}")
-
-        self.processing = False
-
-
-class TimedMessage:
-    """定时发送报文"""
-
-    def __init__(self, name="", message=bytes(), interval=1000, enabled=False):
-        self.name = name  # 报文名称
-        self.message = message  # 报文内容
-        self.interval = interval  # 发送间隔(ms)
-        self.enabled = enabled  # 是否启用
-        self.last_sent = 0  # 上次发送时间
-        self.timer_id = None  # 定时器ID
-
-    def to_dict(self):
-        """转换为字典，用于保存配置"""
-        return {
-            "name": self.name,
-            "message": " ".join([f"{b:02X}" for b in self.message]),
-            "interval": self.interval,
-            "enabled": self.enabled
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        """从字典创建报文，用于加载配置"""
-        try:
-            # 将十六进制字符串转换为字节
-            message_str = data.get("message", "")
-            message_bytes = bytes.fromhex(message_str.replace(" ", ""))
-
-            return cls(
-                name=data.get("name", ""),
-                message=message_bytes,
-                interval=int(data.get("interval", 1000)),
-                enabled=bool(data.get("enabled", False))
-            )
-        except Exception as e:
-            print(f"加载定时报文错误: {str(e)}")
-            return cls()
-
-
-class TimedMessageDialog(QDialog):
-    """定时报文编辑对话框"""
-
-    def __init__(self, parent=None, timed_message=None):
-        super().__init__(parent)
-        self.setWindowTitle("定时报文设置")
-        self.resize(500, 300)
-
-        self.timed_message = timed_message or TimedMessage()
-
-        # 创建布局
-        layout = QVBoxLayout(self)
-
-        # 创建表单
-        form_layout = QFormLayout()
-        layout.addLayout(form_layout)
-
-        # 报文名称
-        self.name_edit = QLineEdit(self.timed_message.name)
-        form_layout.addRow("报文名称:", self.name_edit)
-
-        # 报文内容
-        self.message_edit = QTextEdit()
-        if self.timed_message.message:
-            hex_text = ' '.join([f"{b:02X}" for b in self.timed_message.message])
-            self.message_edit.setPlainText(hex_text)
-        form_layout.addRow("报文内容(十六进制):", self.message_edit)
-
-        # 发送间隔
-        self.interval_spinbox = QSpinBox()
-        self.interval_spinbox.setRange(10, 60000)  # 10ms到60s
-        self.interval_spinbox.setValue(self.timed_message.interval)
-        self.interval_spinbox.setSuffix(" ms")
-        form_layout.addRow("发送间隔:", self.interval_spinbox)
-
-        # 是否启用
-        self.enabled_checkbox = QCheckBox("启用定时发送")
-        self.enabled_checkbox.setChecked(self.timed_message.enabled)
-        form_layout.addRow("", self.enabled_checkbox)
-
-        # 按钮
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-    def accept(self):
-        """确认按钮点击事件"""
-        # 验证输入
-        name = self.name_edit.text().strip()
-        if not name:
-            QMessageBox.warning(self, "错误", "报文名称不能为空!")
-            return
-
-        # 获取报文内容
-        message_text = self.message_edit.toPlainText().strip()
-        try:
-            # 移除空格和换行
-            message_text = message_text.replace(" ", "").replace("\n", "").replace("\r", "")
-            message = bytes.fromhex(message_text)
-            if not message:
-                QMessageBox.warning(self, "错误", "报文内容不能为空!")
-                return
-        except Exception as e:
-            QMessageBox.warning(self, "错误", f"无效的十六进制报文: {str(e)}")
-            return
-
-        # 更新报文对象
-        self.timed_message.name = name
-        self.timed_message.message = message
-        self.timed_message.interval = self.interval_spinbox.value()
-        self.timed_message.enabled = self.enabled_checkbox.isChecked()
-
-        super().accept()
+    def stop(self):
+        self.is_running = False
+        self.wait()
 
 
 class TimedMessagesManager(QWidget):
@@ -254,9 +94,9 @@ class TimedMessagesManager(QWidget):
         self.add_button.clicked.connect(self.add_message)
         button_layout.addWidget(self.add_button)
 
-        # 导入插件报文按钮
-        self.import_button = QPushButton("导入插件报文")
-        self.import_button.clicked.connect(self.import_from_plugin)
+        # 导入协议报文按钮
+        self.import_button = QPushButton("导入协议报文")
+        self.import_button.clicked.connect(self.import_from_protocol)
         button_layout.addWidget(self.import_button)
 
         # 全部启用/禁用按钮
@@ -294,6 +134,7 @@ class TimedMessagesManager(QWidget):
 
     def add_message(self):
         """添加定时报文"""
+        from message_dialog import TimedMessageDialog
         dialog = TimedMessageDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             # 添加到列表
@@ -301,53 +142,43 @@ class TimedMessagesManager(QWidget):
             # 更新表格
             self.update_table()
 
-    def import_from_plugin(self):
-        """从插件导入报文"""
+    def import_from_protocol(self):
+        """从协议中导入报文"""
         # 获取主窗口
         main_window = self.window()
 
-        # 检查是否有已加载的插件
-        if not hasattr(main_window, 'current_plugin') or not main_window.current_plugin:
-            QMessageBox.warning(self, "错误", "请先加载报文插件!")
+        # 检查是否有已加载的协议
+        if not hasattr(main_window, 'protocol_parser') or not main_window.protocol_parser:
+            QMessageBox.warning(self, "错误", "请先加载协议配置!")
             return
 
-        plugin = main_window.current_plugin
+        # 弹出协议选择对话框
+        from message_dialog import ProtocolSelectDialog
+        dialog = ProtocolSelectDialog(main_window.config_parser.get_protocols(), self)
+        if dialog.exec_() == QDialog.Accepted:
+            protocol_id = dialog.selected_protocol
+            protocol_data = main_window.config_parser.get_protocol(protocol_id)
 
-        # 检查插件是否支持生成报文
-        if not hasattr(plugin, 'generate_message'):
-            QMessageBox.warning(self, "错误", "当前插件不支持生成报文!")
-            return
+            if protocol_id and protocol_data:
+                # 创建报文编辑对话框
+                from message_dialog import TimedMessageDialog
+                message_dialog = TimedMessageDialog(self)
 
-        try:
-            # 生成报文
-            message = plugin.generate_message()
-            if not message:
-                QMessageBox.warning(self, "错误", "插件未生成有效报文!")
-                return
+                # 设置协议相关信息
+                message_dialog.set_protocol_info(protocol_id, protocol_data)
 
-            # 创建定时报文
-            timed_message = TimedMessage(
-                name=f"Plugin_{datetime.now().strftime('%H%M%S')}",
-                message=message,
-                interval=1000,
-                enabled=False
-            )
-
-            # 打开编辑对话框
-            dialog = TimedMessageDialog(self, timed_message)
-            if dialog.exec_() == QDialog.Accepted:
-                # 添加到列表
-                self.timed_messages.append(dialog.timed_message)
-                # 更新表格
-                self.update_table()
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"导入报文失败: {str(e)}")
+                if message_dialog.exec_() == QDialog.Accepted:
+                    # 添加到列表
+                    self.timed_messages.append(message_dialog.timed_message)
+                    # 更新表格
+                    self.update_table()
 
     def edit_message(self, row):
         """编辑定时报文"""
         if row < 0 or row >= len(self.timed_messages):
             return
 
+        from message_dialog import TimedMessageDialog
         dialog = TimedMessageDialog(self, self.timed_messages[row])
         if dialog.exec_() == QDialog.Accepted:
             # 更新表格
@@ -429,7 +260,7 @@ class TimedMessagesManager(QWidget):
             operation_layout.addWidget(edit_button)
 
             # 启用/禁用按钮
-            toggle_button = QPushButton("禁用" if message.enabled else "启用")
+            toggle_button =toggle_button = QPushButton("禁用" if message.enabled else "启用")
             toggle_button.clicked.connect(lambda checked, r=row: self.toggle_message(r))
             operation_layout.addWidget(toggle_button)
 
@@ -458,7 +289,7 @@ class TimedMessagesManager(QWidget):
 
     def send_message(self, message):
         """发送报文"""
-        success = self.message_sender.add_message(message.message)
+        success = self.message_sender.add_message(message.message, message.name)
         if success:
             # 发送报文信号，包含报文名称
             self.send_message_signal.emit(message.message, message.name)
@@ -472,7 +303,7 @@ class TimedMessagesManager(QWidget):
             if hasattr(main_window, 'add_log_message'):
                 main_window.add_log_message(f"错误: 无法发送报文 '{message.name}', 已禁用", "error")
 
-    def on_message_sent(self, message):
+    def on_message_sent(self, message, name):
         """报文发送完成处理"""
         pass  # 已通过send_message_signal处理
 
@@ -548,35 +379,416 @@ class TimedMessagesManager(QWidget):
                 QMessageBox.critical(self, "加载失败", f"加载配置失败: {str(e)}")
 
 
-class SerialReceiveThread(QThread):
-    """串口接收线程"""
-    receive_signal = pyqtSignal(bytes)
+class MessageDisplayManager(QTabWidget):
+    """报文显示管理器，显示所有协议的接收报文"""
 
-    def __init__(self, serial_port):
-        super().__init__()
-        self.serial = serial_port
-        self.is_running = True
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.protocol_tabs = {}  # 协议标签页字典 {protocol_id: tab_widget}
+        self.protocol_data = {}  # 协议数据字典 {protocol_id: protocol_data}
+        self.received_messages = {}  # 接收到的报文字典 {protocol_id: [messages]}
 
-    def run(self):
-        while self.is_running and self.serial and self.serial.isOpen():
-            try:
-                # 检查是否有可读取的数据
-                if self.serial.in_waiting:
-                    data = self.serial.read(self.serial.in_waiting)
-                    if data:
-                        self.receive_signal.emit(data)
-            except Exception as e:
-                print(f"接收数据错误: {str(e)}")
+    def setup_protocols(self, protocols):
+        """
+        设置协议信息
 
-            # 防止CPU占用过高
-            self.msleep(10)
+        Args:
+            protocols (dict): 协议信息字典 {protocol_id: protocol_data}
+        """
+        # 清空现有标签页
+        self.clear()
+        self.protocol_tabs.clear()
+        self.protocol_data.clear()
+        self.received_messages.clear()
 
-    def stop(self):
-        self.is_running = False
-        self.wait()
+        # 添加通用接收标签页
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
 
+        # 创建通用接收列表
+        self.general_list = QTableWidget(0, 3)
+        self.general_list.setHorizontalHeaderLabels(["时间", "协议ID", "内容"])
+        self.general_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.general_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.general_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.general_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.general_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        general_layout.addWidget(self.general_list)
 
+        # 添加按钮区域
+        button_layout = QHBoxLayout()
+        general_layout.addLayout(button_layout)
+
+        # 清空按钮
+        clear_btn = QPushButton("清空")
+        clear_btn.clicked.connect(self.clear_general_list)
+        button_layout.addWidget(clear_btn)
+
+        # 解析选中按钮
+        parse_btn = QPushButton("解析选中")
+        parse_btn.clicked.connect(self.parse_selected_message)
+        button_layout.addWidget(parse_btn)
+
+        # 导出按钮
+        export_btn = QPushButton("导出日志")
+        export_btn.clicked.connect(self.export_general_log)
+        button_layout.addWidget(export_btn)
+
+        self.addTab(general_tab, "通用接收")
+
+        # 为每个协议创建标签页
+        for protocol_id, protocol_data in protocols.items():
+            self.protocol_data[protocol_id] = protocol_data
+            self.received_messages[protocol_id] = []
+
+            protocol_tab = QWidget()
+            protocol_layout = QVBoxLayout(protocol_tab)
+
+            # 创建协议接收列表
+            protocol_list = QTableWidget(0, 4)
+            protocol_list.setHorizontalHeaderLabels(["时间", "报文ID", "类型", "字段"])
+            protocol_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            protocol_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+            protocol_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            protocol_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            protocol_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            protocol_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+            protocol_layout.addWidget(protocol_list)
+
+            # 添加按钮区域
+            button_layout = QHBoxLayout()
+            protocol_layout.addLayout(button_layout)
+
+            # 清空按钮
+            clear_btn = QPushButton("清空")
+            clear_btn.clicked.connect(lambda checked, pid=protocol_id: self.clear_protocol_list(pid))
+            button_layout.addWidget(clear_btn)
+
+            # 详情按钮
+            detail_btn = QPushButton("查看详情")
+            detail_btn.clicked.connect(lambda checked, pid=protocol_id: self.show_message_detail(pid))
+            button_layout.addWidget(detail_btn)
+
+            # 复制到发送区按钮
+            copy_btn = QPushButton("复制到发送区")
+            copy_btn.clicked.connect(lambda checked, pid=protocol_id: self.copy_to_send_area(pid))
+            button_layout.addWidget(copy_btn)
+
+            # 导出按钮
+            export_btn = QPushButton("导出日志")
+            export_btn.clicked.connect(lambda checked, pid=protocol_id: self.export_protocol_log(pid))
+            button_layout.addWidget(export_btn)
+
+            # 添加标签页
+            protocol_name = protocol_data.get('protocol_name', protocol_id)
+            self.addTab(protocol_tab, f"{protocol_id} - {protocol_name}")
+
+            # 保存标签页引用
+            self.protocol_tabs[protocol_id] = protocol_list
+
+    def add_general_message(self, timestamp, protocol_id, message_bytes):
+        """
+        添加通用接收报文
+
+        Args:
+            timestamp (str): 时间戳
+            protocol_id (str): 协议ID
+            message_bytes (bytes): 报文数据
+        """
+        row = self.general_list.rowCount()
+        self.general_list.insertRow(row)
+
+        # 设置时间
+        self.general_list.setItem(row, 0, QTableWidgetItem(timestamp))
+
+        # 设置协议ID
+        protocol_name = ""
+        if protocol_id in self.protocol_data:
+            protocol_name = self.protocol_data[protocol_id].get('protocol_name', '')
+
+        protocol_item = QTableWidgetItem(f"{protocol_id}")
+        if protocol_name:
+            protocol_item.setToolTip(protocol_name)
+        self.general_list.setItem(row, 1, protocol_item)
+
+        # 设置内容
+        content = " ".join([f"{b:02X}" for b in message_bytes])
+        self.general_list.setItem(row, 2, QTableWidgetItem(content))
+
+        # 滚动到最新行
+        self.general_list.scrollToBottom()
+
+    def add_protocol_message(self, protocol_id, message_data):
+        """
+        添加协议解析后的报文
+
+        Args:
+            protocol_id (str): 协议ID
+            message_data (dict): 解析后的报文数据
+        """
+        if protocol_id not in self.protocol_tabs:
+            return
+
+        # 保存报文数据
+        self.received_messages[protocol_id].append(message_data)
+
+        # 获取协议标签页
+        protocol_list = self.protocol_tabs[protocol_id]
+
+        # 添加新行
+        row = protocol_list.rowCount()
+        protocol_list.insertRow(row)
+
+        # 设置时间
+        timestamp = message_data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
+        protocol_list.setItem(row, 0, QTableWidgetItem(timestamp))
+
+        # 设置报文ID
+        message_id = message_data.get('message_id', '')
+        protocol_list.setItem(row, 1, QTableWidgetItem(message_id))
+
+        # 设置类型
+        message_type = message_data.get('message_type', '')
+        protocol_list.setItem(row, 2, QTableWidgetItem(message_type))
+
+        # 设置字段
+        fields = message_data.get('fields', {})
+        field_text = ""
+        for field_id, field_info in fields.items():
+            field_name = field_info.get('name', field_id)
+            field_value = field_info.get('value', '')
+            description = field_info.get('description', '')
+
+            if description:
+                field_text += f"{field_name}: {field_value} ({description}), "
+            else:
+                field_text += f"{field_name}: {field_value}, "
+
+        if field_text:
+            field_text = field_text[:-2]  # 去掉最后的逗号和空格
+
+        protocol_list.setItem(row, 3, QTableWidgetItem(field_text))
+
+        # 滚动到最新行
+        protocol_list.scrollToBottom()
+
+        # 高亮显示标签页
+        for i in range(self.count()):
+            if self.tabText(i).startswith(protocol_id):
+                # 如果当前不是这个标签页，设置字体为粗体
+                if self.currentIndex() != i:
+                    tab_text = self.tabText(i)
+                    self.setTabText(i, "* " + tab_text.lstrip("* "))
+                break
+
+    def clear_general_list(self):
+        """清空通用接收列表"""
+        self.general_list.setRowCount(0)
+
+    def clear_protocol_list(self, protocol_id):
+        """
+        清空指定协议的接收列表
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        if protocol_id in self.protocol_tabs:
+            self.protocol_tabs[protocol_id].setRowCount(0)
+            self.received_messages[protocol_id].clear()
+
+    def parse_selected_message(self):
+        """解析选中的通用接收报文"""
+        selected_rows = self.general_list.selectedItems()
+        if not selected_rows:
+            return
+
+        # 获取选中行
+        row = selected_rows[0].row()
+
+        # 获取报文内容
+        content_item = self.general_list.item(row, 2)
+        if not content_item:
+            return
+
+        try:
+            # 将十六进制字符串转换为字节
+            hex_content = content_item.text().replace(" ", "")
+            message_bytes = bytes.fromhex(hex_content)
+
+            # 解析报文
+            main_window = self.window()
+            if hasattr(main_window, 'protocol_parser') and main_window.protocol_parser:
+                protocol_id, parsed_data = main_window.protocol_parser.parse_message(message_bytes)
+
+                if protocol_id and parsed_data:
+                    # 显示解析结果
+                    from message_dialog import MessageDetailDialog
+                    dialog = MessageDetailDialog(parsed_data, self)
+                    dialog.exec_()
+                else:
+                    QMessageBox.information(self, "解析结果", "无法解析报文，请检查报文格式或加载相应的协议。")
+        except Exception as e:
+            QMessageBox.warning(self, "解析错误", f"解析报文时出错: {str(e)}")
+
+    def show_message_detail(self, protocol_id):
+        """
+        显示指定协议报文的详情
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        if protocol_id not in self.protocol_tabs:
+            return
+
+        protocol_list = self.protocol_tabs[protocol_id]
+        selected_items = protocol_list.selectedItems()
+
+        if not selected_items:
+            QMessageBox.information(self, "提示", "请先选择一条报文记录。")
+            return
+
+        # 获取选中行
+        row = selected_items[0].row()
+
+        # 获取对应的报文数据
+        if row < len(self.received_messages[protocol_id]):
+            message_data = self.received_messages[protocol_id][row]
+
+            # 显示详情对话框
+            from message_dialog import MessageDetailDialog
+            dialog = MessageDetailDialog(message_data, self)
+            dialog.exec_()
+
+    def copy_to_send_area(self, protocol_id):
+        """
+        将选中的报文复制到发送区
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        if protocol_id not in self.protocol_tabs:
+            return
+
+        protocol_list = self.protocol_tabs[protocol_id]
+        selected_items = protocol_list.selectedItems()
+
+        if not selected_items:
+            QMessageBox.information(self, "提示", "请先选择一条报文记录。")
+            return
+
+        # 获取选中行
+        row = selected_items[0].row()
+
+        # 获取对应的报文数据
+        if row < len(self.received_messages[protocol_id]):
+            message_data = self.received_messages[protocol_id][row]
+
+            # 提取原始报文
+            raw_message = message_data.get('raw_message', '')
+
+            # 复制到快速发送区
+            main_window = self.window()
+            if hasattr(main_window, 'quick_send_text'):
+                main_window.quick_send_text.setText(raw_message.replace(" ", ""))
+
+                # 添加日志
+                if hasattr(main_window, 'add_log_message'):
+                    main_window.add_log_message("报文已复制到快速发送区", "system")
+            else:
+                QMessageBox.information(self, "提示", f"报文已复制，但未找到快速发送区。\n\n报文内容：{raw_message}")
+
+    def export_general_log(self):
+        """导出通用接收日志"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出接收日志", "", "文本文件 (*.txt);;CSV文件 (*.csv);;所有文件 (*.*)")
+
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # 写入标题
+                if file_path.lower().endswith('.csv'):
+                    f.write("时间,协议ID,内容\n")
+                else:
+                    f.write("时间\t协议ID\t内容\n")
+
+                # 写入数据
+                for row in range(self.general_list.rowCount()):
+                    time_item = self.general_list.item(row, 0)
+                    protocol_item = self.general_list.item(row, 1)
+                    content_item = self.general_list.item(row, 2)
+
+                    if time_item and protocol_item and content_item:
+                        if file_path.lower().endswith('.csv'):
+                            f.write(f"{time_item.text()},{protocol_item.text()},{content_item.text()}\n")
+                        else:
+                            f.write(f"{time_item.text()}\t{protocol_item.text()}\t{content_item.text()}\n")
+
+            QMessageBox.information(self, "导出成功", f"日志已导出到: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"导出日志失败: {str(e)}")
+
+    def export_protocol_log(self, protocol_id):
+        """
+        导出指定协议的接收日志
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        if protocol_id not in self.protocol_tabs:
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, f"导出 {protocol_id} 接收日志", "", "文本文件 (*.txt);;CSV文件 (*.csv);;所有文件 (*.*)")
+
+        if not file_path:
+            return
+
+        try:
+            protocol_list = self.protocol_tabs[protocol_id]
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # 写入标题
+                if file_path.lower().endswith('.csv'):
+                    f.write("时间,报文ID,类型,字段\n")
+                else:
+                    f.write("时间\t报文ID\t类型\t字段\n")
+
+                # 写入数据
+                for row in range(protocol_list.rowCount()):
+                    time_item = protocol_list.item(row, 0)
+                    message_id_item = protocol_list.item(row, 1)
+                    type_item = protocol_list.item(row, 2)
+                    fields_item = protocol_list.item(row, 3)
+
+                    if time_item and message_id_item and type_item and fields_item:
+                        if file_path.lower().endswith('.csv'):
+                            f.write(f"{time_item.text()},{message_id_item.text()},{type_item.text()},\"{fields_item.text()}\"\n")
+                        else:
+                            f.write(f"{time_item.text()}\t{message_id_item.text()}\t{type_item.text()}\t{fields_item.text()}\n")
+
+            QMessageBox.information(self, "导出成功", f"日志已导出到: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"导出日志失败: {str(e)}")
+
+    def tabChanged(self, index):
+        """
+        标签页切换事件
+
+        Args:
+            index (int): 新的标签页索引
+        """
+        # 获取当前标签页的标题
+        tab_text = self.tabText(index)
+
+        # 去掉提醒标记
+        if tab_text.startswith("* "):
+            clean_text = tab_text[2:]
+            self.setTabText(index, clean_text)
 class SerialToolUI(QMainWindow):
+    """串口通信工具主窗口"""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("串口通信工具 - 增强版")
@@ -599,6 +811,7 @@ class SerialToolUI(QMainWindow):
         # 添加重置计数器按钮到状态栏
         self.resetCounterBtn = QPushButton("计数器清零")
         self.resetCounterBtn.setFixedWidth(100)
+        self.resetCounterBtn.clicked.connect(self.reset_counters)
         self.statusBar.addPermanentWidget(self.resetCounterBtn)
 
         # 创建主窗口部件和布局
@@ -612,16 +825,21 @@ class SerialToolUI(QMainWindow):
 
         # ========== 左侧区域（串口设置、发送、接收）==========
         left_widget = QWidget()
+        left_widget.setFixedWidth(500)  # 设置左侧区域固定宽度为400px
         left_layout = QVBoxLayout(left_widget)
         main_splitter.addWidget(left_widget)
 
-        # ========== 右侧区域（报文生成区）==========
+        # ========== 右侧区域（协议生成区）==========
         right_widget = QWidget()
+        # 右侧区域不设置固定宽度，让它自动填充剩余空间
         right_layout = QVBoxLayout(right_widget)
         main_splitter.addWidget(right_widget)
 
-        # 设置左右分割比例 (1:1)
-        main_splitter.setSizes([600, 600])
+        # 设置左右分割比例 - 不再需要明确设置，因为左侧已固定宽度
+        # main_splitter.setSizes([400, 800])  # 左侧400px，右侧800px
+
+        # 禁用分割器移动 - 可选，如果要保持左侧宽度完全固定
+        main_splitter.setCollapsible(0, False)  # 禁止左侧区域收缩
 
         # ========== 左侧顶部：串口设置 ==========
         serial_config_group = QGroupBox("串口设置")
@@ -630,6 +848,7 @@ class SerialToolUI(QMainWindow):
 
         # 串口检测按钮
         self.detect_serial_btn = QPushButton("检测串口")
+        self.detect_serial_btn.clicked.connect(self.update_serial_ports)
         serial_config_layout.addWidget(self.detect_serial_btn, 0, 0, 1, 2)
 
         # 串口选择
@@ -667,7 +886,9 @@ class SerialToolUI(QMainWindow):
 
         # 打开/关闭串口按钮
         self.open_serial_btn = QPushButton("打开串口")
+        self.open_serial_btn.clicked.connect(self.open_serial)
         self.close_serial_btn = QPushButton("关闭串口")
+        self.close_serial_btn.clicked.connect(self.close_serial)
         self.close_serial_btn.setEnabled(False)  # 初始时关闭按钮不可用
         serial_config_layout.addWidget(self.open_serial_btn, 6, 0)
         serial_config_layout.addWidget(self.close_serial_btn, 6, 1)
@@ -683,6 +904,7 @@ class SerialToolUI(QMainWindow):
         quick_send_layout.addWidget(self.quick_send_text)
 
         # 发送按钮区域
+
         quick_send_buttons = QHBoxLayout()
         quick_send_layout.addLayout(quick_send_buttons)
 
@@ -748,15 +970,16 @@ class SerialToolUI(QMainWindow):
         self.save_log_btn.clicked.connect(self.save_log)
         log_control_layout.addWidget(self.save_log_btn)
 
-        # ========== 右侧：用户报文生成区 ==========
+        # ========== 右侧：协议配置区 ==========
         # 添加配置文件选择区域
-        config_group = QGroupBox("报文插件配置")
+        config_group = QGroupBox("协议配置")
         config_layout = QVBoxLayout(config_group)
         right_layout.addWidget(config_group)
 
-        # 设置报文插件配置区域的固定高度为70像素
+        # 设置协议配置区域的固定高度
         config_group.setFixedHeight(100)
 
+        # 配置文件选择区域
         config_select_layout = QHBoxLayout()
         config_layout.addLayout(config_select_layout)
 
@@ -766,73 +989,60 @@ class SerialToolUI(QMainWindow):
         config_select_layout.addWidget(self.config_path)
 
         self.browse_config_btn = QPushButton("浏览...")
+        self.browse_config_btn.clicked.connect(self.browse_config)
         config_select_layout.addWidget(self.browse_config_btn)
 
         self.load_config_btn = QPushButton("加载配置")
+        self.load_config_btn.clicked.connect(self.load_config)
         config_select_layout.addWidget(self.load_config_btn)
 
-        # 插件选择下拉框
-        plugin_layout = QHBoxLayout()
-        config_layout.addLayout(plugin_layout)
+        # 协议信息区域
+        protocol_info_layout = QHBoxLayout()
+        config_layout.addLayout(protocol_info_layout)
 
-        plugin_layout.addWidget(QLabel("已加载插件:"))
-        self.plugin_combo = QComboBox()
-        plugin_layout.addWidget(self.plugin_combo)
+        protocol_info_layout.addWidget(QLabel("已加载协议:"))
+        self.protocol_count_label = QLabel("0")
+        protocol_info_layout.addWidget(self.protocol_count_label)
 
-        self.load_plugin_btn = QPushButton("加载插件")
-        plugin_layout.addWidget(self.load_plugin_btn)
+        protocol_info_layout.addWidget(QLabel("支持报文ID:"))
+        self.message_ids_label = QLabel("")
+        protocol_info_layout.addWidget(self.message_ids_label)
+        protocol_info_layout.addStretch()
 
-        # 添加插件容器区域
-        self.plugin_container = QGroupBox("插件界面区")
-        self.plugin_container_layout = QVBoxLayout(self.plugin_container)
-        right_layout.addWidget(self.plugin_container)
+        # ========== 协议生成与接收区 ==========
+        # 使用选项卡分离生成和接收
+        self.protocol_tabs = QTabWidget()
+        right_layout.addWidget(self.protocol_tabs)
+
+        # 创建生成选项卡
+        self.generate_tab = QTabWidget()
+        self.protocol_tabs.addTab(self.generate_tab, "报文生成")
+
+        # 创建接收选项卡
+        self.message_display_manager = MessageDisplayManager()
+        self.message_display_manager.currentChanged.connect(self.message_display_manager.tabChanged)
+        self.protocol_tabs.addTab(self.message_display_manager, "报文接收")
 
         # 初始化变量
         self.serial = None
         self.receive_thread = None
-        self.message_plugins = {}
-        self.current_plugin = None
-        self.current_plugin_widget = None
+        self.config_parser = ConfigParser()
+        self.protocol_ui_generator = ProtocolUIGenerator()
+        self.protocol_parser = ProtocolParser()
+        self.message_receiver = MessageReceiver()
         self.received_count = 0
         self.sent_count = 0
         self.send_queue = MessageSender()
+        self.protocol_widgets = {}  # 协议生成界面 {protocol_id: widget}
 
         # 初始化串口列表
         self.update_serial_ports()
 
         # 连接信号和槽
-        self.detect_serial_btn.clicked.connect(self.update_serial_ports)
-        self.clear_log_btn.clicked.connect(self.clear_log)
-        self.save_log_btn.clicked.connect(self.save_log)
-        self.resetCounterBtn.clicked.connect(self.reset_counters)
-        self.open_serial_btn.clicked.connect(self.open_serial)
-        self.close_serial_btn.clicked.connect(self.close_serial)
-        self.quick_send_btn.clicked.connect(self.send_quick_data)
-        self.browse_config_btn.clicked.connect(self.browse_config)
-        self.load_config_btn.clicked.connect(self.load_config)
-        self.load_plugin_btn.clicked.connect(self.load_selected_plugin)
-        self.plugin_combo.currentIndexChanged.connect(self.plugin_selected)
         self.send_queue.message_sent.connect(self.on_message_sent)
+        self.message_receiver.message_received.connect(self.on_message_received)
+        self.protocol_parser.message_parsed.connect(self.on_message_parsed)
 
-        # 添加日志显示颜色格式
-        self.log_formats = {
-            "send": QTextCharFormat(),  # 发送数据颜色
-            "receive": QTextCharFormat(),  # 接收数据颜色
-            "system": QTextCharFormat(),  # 系统信息颜色
-            "error": QTextCharFormat()  # 错误信息颜色
-        }
-
-        # 设置不同消息类型的颜色
-        self.log_formats["send"].setForeground(QBrush(QColor("blue")))
-        self.log_formats["receive"].setForeground(QBrush(QColor("green")))
-        self.log_formats["system"].setForeground(QBrush(QColor("gray")))
-        self.log_formats["error"].setForeground(QBrush(QColor("red")))
-
-        # 设置系统消息为粗体
-        font = QFont()
-        font.setBold(True)
-        self.log_formats["system"].setFont(font)
-        self.log_formats["error"].setFont(font)
 
     def update_serial_ports(self):
         """更新可用的串口列表"""
@@ -843,42 +1053,6 @@ class SerialToolUI(QMainWindow):
         else:
             self.serial_port_combo.addItem("无可用串口")
 
-    def clear_log(self):
-        """清空日志区域"""
-        self.log_display.clear()
-
-    def save_log(self):
-        """保存日志到文件"""
-        # 弹出保存对话框
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "保存日志", "", "文本文件 (*.txt);;所有文件 (*.*)")
-
-        if not file_path:
-            return
-
-        try:
-            # 获取日志文本
-            text = self.log_display.toPlainText()
-
-            # 保存到文件
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(text)
-
-            self.add_log_message(f"日志已保存到 {file_path}", "system")
-        except Exception as e:
-            self.add_log_message(f"保存日志失败: {str(e)}", "error")
-
-    def reset_counters(self):
-        """重置计数器"""
-        self.received_count = 0
-        self.sent_count = 0
-        self.update_status_counters()
-        self.add_log_message("计数器已重置", "system")
-
-    def update_status_counters(self):
-        """更新状态栏中的计数器显示"""
-        self.receivedCountLabel.setText(f"接收: {self.received_count} 字节")
-        self.sentCountLabel.setText(f"发送: {self.sent_count} 字节")
 
     def open_serial(self):
         """打开串口"""
@@ -923,12 +1097,10 @@ class SerialToolUI(QMainWindow):
                 # 设置发送队列的串口
                 self.send_queue.set_serial(self.serial)
 
-                # 如果有活动的插件，通知它串口状态
-                if self.current_plugin and hasattr(self.current_plugin, 'set_serial'):
-                    self.current_plugin.set_serial(self.serial)
         except Exception as e:
             self.add_log_message(f"打开串口失败: {str(e)}", "error")
             self.statusLabel.setText(f"串口: 连接失败 - {str(e)}")
+
 
     def close_serial(self):
         """关闭串口"""
@@ -949,81 +1121,314 @@ class SerialToolUI(QMainWindow):
             # 通知发送队列
             self.send_queue.set_serial(None)
 
-            # 如果有活动的插件，通知它串口状态
-            if self.current_plugin and hasattr(self.current_plugin, 'set_serial'):
-                self.current_plugin.set_serial(None)
+
+    def browse_config(self):
+        """浏览并选择配置文件"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "", "INI文件 (*.ini);;所有文件 (*.*)")
+        if file_path:
+            self.config_path.setText(file_path)
+
+
+    def load_config(self):
+        """加载配置文件和协议"""
+        config_path = self.config_path.text()
+        if not config_path or not os.path.exists(config_path):
+            QMessageBox.warning(self, "错误", "请选择有效的配置文件!")
+            return
+
+        try:
+            # 加载配置
+            success = self.config_parser.load_config(config_path)
+            if not success:
+                QMessageBox.warning(self, "错误", "加载配置文件失败!")
+                return
+
+            # 获取协议
+            protocols = self.config_parser.get_protocols()
+            if not protocols:
+                QMessageBox.warning(self, "错误", "未找到有效的协议配置!")
+                return
+
+            # 清空现有协议界面
+            self.clear_protocols()
+
+            # 设置协议解析器
+            self.protocol_parser.set_protocols(protocols)
+
+            # 设置报文显示管理器
+            self.message_display_manager.setup_protocols(protocols)
+
+            # 为每个协议创建界面
+            for protocol_id, protocol_data in protocols.items():
+                # 创建协议界面
+                protocol_widget = self.protocol_ui_generator.generate_protocol_widget(protocol_data)
+                if protocol_widget:
+                    # 添加到生成选项卡
+                    self.generate_tab.addTab(protocol_widget, protocol_id)
+
+                    # 保存界面引用
+                    self.protocol_widgets[protocol_id] = protocol_widget
+
+                    # 连接界面上的按钮
+                    self.connect_protocol_buttons(protocol_widget, protocol_id)
+
+            # 更新协议信息
+            self.protocol_count_label.setText(str(len(protocols)))
+            message_ids = ", ".join([protocol_data.get('message_id', '') for protocol_data in protocols.values()])
+            self.message_ids_label.setText(message_ids)
+
+            # 添加日志
+            self.add_log_message(f"已加载 {len(protocols)} 个协议", "system")
+           # self.statusBar().showMessage(f"已加载 {len(protocols)} 个协议", 3000)
+
+        except Exception as e:
+            self.add_log_message(f"加载配置文件失败: {str(e)}", "error")
+            self.statusBar().showMessage(f"加载配置文件失败: {str(e)}", 3000)
+
+
+    def clear_protocols(self):
+        """清空所有协议界面"""
+        # 清空生成选项卡
+        while self.generate_tab.count() > 0:
+            self.generate_tab.removeTab(0)
+
+        # 清空界面引用
+        self.protocol_widgets.clear()
+
+
+    def connect_protocol_buttons(self, protocol_widget, protocol_id):
+        """
+        连接协议界面上的按钮事件
+
+        Args:
+            protocol_widget (QWidget): 协议界面
+            protocol_id (str): 协议ID
+        """
+        # 查找生成报文按钮
+        generate_btn = protocol_widget.findChild(QPushButton, "generate_btn")
+        if not generate_btn:
+            # 查找所有按钮
+            buttons = protocol_widget.findChildren(QPushButton)
+            for btn in buttons:
+                if btn.text() == "生成报文":
+                    generate_btn = btn
+                    break
+
+        if generate_btn:
+            generate_btn.clicked.connect(lambda: self.generate_protocol_message(protocol_id))
+
+        # 查找复制到发送区按钮
+        copy_to_send_btn = protocol_widget.findChild(QPushButton, "copy_to_send_btn")
+        if not copy_to_send_btn:
+            # 查找所有按钮
+            buttons = protocol_widget.findChildren(QPushButton)
+            for btn in buttons:
+                if btn.text() == "复制到发送区":
+                    copy_to_send_btn = btn
+                    break
+
+        if copy_to_send_btn:
+            copy_to_send_btn.clicked.connect(lambda: self.copy_to_send_area(protocol_id))
+
+        # 查找保存配置按钮
+        save_config_btn = protocol_widget.findChild(QPushButton, "save_config_btn")
+        if not save_config_btn:
+            # 查找所有按钮
+            buttons = protocol_widget.findChildren(QPushButton)
+            for btn in buttons:
+                if btn.text() == "保存配置":
+                    save_config_btn = btn
+                    break
+
+        if save_config_btn:
+            save_config_btn.clicked.connect(lambda: self.save_protocol_config(protocol_id))
+
+        # 查找加载配置按钮
+        load_config_btn = protocol_widget.findChild(QPushButton, "load_config_btn")
+        if not load_config_btn:
+            # 查找所有按钮
+            buttons = protocol_widget.findChildren(QPushButton)
+            for btn in buttons:
+                if btn.text() == "加载配置":
+                    load_config_btn = btn
+                    break
+
+        if load_config_btn:
+            load_config_btn.clicked.connect(lambda: self.load_protocol_config(protocol_id))
+
+
+    def generate_protocol_message(self, protocol_id):
+        """
+        生成协议报文
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        try:
+            # 获取字段值
+            field_values = self.protocol_ui_generator.get_field_values()
+
+            # 生成报文
+            message = self.protocol_parser.generate_message(protocol_id, field_values)
+
+            if message:
+                # 弹出报文预览对话框
+                from message_dialog import MessagePreviewDialog
+                dialog = MessagePreviewDialog(message, protocol_id, self)
+                if dialog.exec_() == QDialog.Accepted:
+                    # 发送报文
+                    self.send_message(message, f"{protocol_id}报文")
+                    self.add_log_message(f"已发送{protocol_id}报文", "system")
+            else:
+                QMessageBox.warning(self, "错误", "生成报文失败，请检查字段值!")
+        except Exception as e:
+            self.add_log_message(f"生成报文错误: {str(e)}", "error")
+
+
+    def copy_to_send_area(self, protocol_id):
+        """
+        将协议报文复制到发送区
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        try:
+            # 获取字段值
+            field_values = self.protocol_ui_generator.get_field_values()
+
+            # 生成报文
+            message = self.protocol_parser.generate_message(protocol_id, field_values)
+
+            if message:
+                # 转换为十六进制字符串
+                hex_str = ''.join([f"{b:02X}" for b in message])
+
+                # 复制到快速发送区
+                self.quick_send_text.setText(hex_str)
+
+                # 添加日志
+                self.add_log_message("报文已复制到快速发送区", "system")
+            else:
+                QMessageBox.warning(self, "错误", "生成报文失败，请检查字段值!")
+        except Exception as e:
+            self.add_log_message(f"复制报文错误: {str(e)}", "error")
+
+
+    def save_protocol_config(self, protocol_id):
+        """
+        保存协议配置
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, f"保存 {protocol_id} 配置", "", "JSON文件 (*.json);;所有文件 (*.*)")
+
+        if not file_path:
+            return
+
+        try:
+            # 获取字段值
+            field_values = self.protocol_ui_generator.get_field_values()
+
+            # 保存到文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(field_values, f, indent=4, ensure_ascii=False)
+
+            self.add_log_message(f"{protocol_id}配置已保存到 {file_path}", "system")
+        except Exception as e:
+            self.add_log_message(f"保存配置失败: {str(e)}", "error")
+
+
+    def load_protocol_config(self, protocol_id):
+        """
+        加载协议配置
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, f"加载 {protocol_id} 配置", "", "JSON文件 (*.json);;所有文件 (*.*)")
+
+        if not file_path:
+            return
+
+        try:
+            # 从文件加载
+            with open(file_path, 'r', encoding='utf-8') as f:
+                field_values = json.load(f)
+
+            # 设置字段值
+            self.protocol_ui_generator.set_field_values(field_values)
+
+            self.add_log_message(f"已加载 {protocol_id} 配置", "system")
+        except Exception as e:
+            self.add_log_message(f"加载配置失败: {str(e)}", "error")
+
 
     def process_received_data(self, data):
-        """处理接收到的数据"""
+        """
+        处理接收到的数据
+
+        Args:
+            data (bytes): 接收到的数据
+        """
+        # 更新接收计数
+        self.received_count += len(data)
+        self.update_status_counters()
+
+        # 添加到日志
         try:
-            # 更新接收计数
-            self.received_count += len(data)
-            self.update_status_counters()
+            # 尝试转换为ASCII
+            ascii_text = data.decode('utf-8', errors='replace')
+            # 十六进制表示
+            hex_text = ' '.join([f"{b:02X}" for b in data])
 
-            # 添加到日志（包含ASCII和HEX）
-            try:
-                ascii_text = data.decode('utf-8', errors='replace')
-                hex_text = ' '.join([f"{b:02X}" for b in data])
+            # 创建日志内容
+            log_content = ascii_text
+            if self.show_hex.isChecked():
+                log_content += f" [HEX: {hex_text}]"
 
-                # 创建日志内容
-                log_content = ascii_text
-                if self.show_hex.isChecked():
-                    log_content += f" [HEX: {hex_text}]"
-
-                # 添加到日志
-                self.add_log_message(log_content, "receive")
-            except Exception as e:
-                self.add_log_message(f"处理接收数据错误: {str(e)}", "error")
-
-            # 如果有活动的插件，通知它接收到的数据
-            if self.current_plugin and hasattr(self.current_plugin, 'on_data_received'):
-                self.current_plugin.on_data_received(data)
-
+            # 添加到日志
+            self.add_log_message(log_content, "receive")
         except Exception as e:
             self.add_log_message(f"处理接收数据错误: {str(e)}", "error")
 
-    def add_log_message(self, message, message_type="system"):
-        """添加消息到日志区域
+        # 交给报文接收器处理
+        self.message_receiver.process_data(data)
+
+
+    def on_message_received(self, message):
+        """
+        报文接收完成处理
 
         Args:
-            message (str): 日志消息内容
-            message_type (str): 消息类型（"send"/"receive"/"system"/"error"）
+            message (bytes): 接收到的完整报文
         """
-        # 获取当前光标
-        cursor = self.log_display.textCursor()
+        # 尝试解析报文
+        protocol_id, parsed_data = self.protocol_parser.parse_message(message)
 
-        # 移动到文档末尾
-        cursor.movePosition(QTextCursor.End)
+        # 添加到通用接收列表
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        self.message_display_manager.add_general_message(timestamp, protocol_id or "未知", message)
 
-        # 添加时间戳（如果需要）
-        if self.show_time.isChecked():
-            timestamp = datetime.now().strftime('[%H:%M:%S.%f]')
-            cursor.insertText(timestamp + " ")
 
-        # 添加消息类型标签
-        type_labels = {
-            "send": "[发送] ",
-            "receive": "[接收] ",
-            "system": "[系统] ",
-            "error": "[错误] "
-        }
+    def on_message_parsed(self, protocol_id, parsed_data):
+        """
+        报文解析完成处理
 
-        # 设置消息格式
-        cursor.setCharFormat(self.log_formats[message_type])
+        Args:
+            protocol_id (str): 协议ID
+            parsed_data (dict): 解析后的报文数据
+        """
+        # 添加到协议接收列表
+        self.message_display_manager.add_protocol_message(protocol_id, parsed_data)
 
-        # 插入消息类型标签
-        cursor.insertText(type_labels.get(message_type, ""))
+        # 添加日志
+        message_id = parsed_data.get('message_id', '')
+        message_type = parsed_data.get('message_type', '')
+        self.add_log_message(f"接收到 {protocol_id} 报文 - ID: {message_id}, 类型: {message_type}", "system")
 
-        # 插入消息内容
-        cursor.insertText(message)
-
-        # 添加换行
-        cursor.insertText("\n")
-
-        # 如果启用了自动滚动，滚动到底部
-        if self.auto_scroll.isChecked():
-            self.log_display.setTextCursor(cursor)
-            self.log_display.ensureCursorVisible()
 
     def send_quick_data(self):
         """发送快速发送区域的数据"""
@@ -1047,41 +1452,32 @@ class SerialToolUI(QMainWindow):
                 self.add_log_message("无效的十六进制数据", "error")
                 return
 
-            # 添加到发送队列
-            self.send_queue.add_message(send_bytes)
+            # 发送数据
+            self.send_message(send_bytes, "快速发送")
 
         except Exception as e:
             self.add_log_message(f"发送失败: {str(e)}", "error")
 
-    def on_message_sent(self, message):
-        """报文发送完成处理"""
-        # 更新发送计数
-        self.sent_count += len(message)
-        self.update_status_counters()
 
-        # 记录发送信息
-        hex_text = ' '.join([f"{b:02X}" for b in message])
+    def send_message(self, message, name=''):
+        """
+        发送报文
 
-        try:
-            # 尝试将字节转换为ASCII
-            ascii_text = message.decode('utf-8', errors='replace')
-            log_content = ascii_text
-        except:
-            # 如果无法转换，只显示十六进制
-            log_content = ""
+        Args:
+            message (bytes): 要发送的报文
+            name (str): 报文名称
+        """
+        self.send_queue.add_message(message, name)
 
-        # 如果需要显示十六进制，添加到日志内容
-        if self.show_hex.isChecked() or not log_content:
-            if log_content:
-                log_content += f" [HEX: {hex_text}]"
-            else:
-                log_content = f"HEX: {hex_text}"
 
-        # 添加到日志
-        self.add_log_message(log_content, "send")
+    def on_message_sent(self, message, name):
+        """
+        报文发送完成处理
 
-    def on_timed_message_sent(self, message, name):
-        """定时报文发送完成处理"""
+        Args:
+            message (bytes): 发送的报文
+            name (str): 报文名称
+        """
         # 更新发送计数
         self.sent_count += len(message)
         self.update_status_counters()
@@ -1098,152 +1494,137 @@ class SerialToolUI(QMainWindow):
             log_content = f"{name}"
 
         # 如果需要显示十六进制，添加到日志内容
-        if self.show_hex.isChecked() or not log_content:
-            if log_content:
-                log_content += f" [HEX: {hex_text}]"
-            else:
-                log_content = f"{name} [HEX: {hex_text}]"
+        if self.show_hex.isChecked():
+            log_content += f" [HEX: {hex_text}]"
 
         # 添加到日志
         self.add_log_message(log_content, "send")
 
-    def browse_config(self):
-        """浏览并选择配置文件"""
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "", "INI文件 (*.ini);;所有文件 (*.*)")
-        if file_path:
-            self.config_path.setText(file_path)
 
-    def load_config(self):
-        """加载配置文件并初始化插件列表"""
-        config_path = self.config_path.text()
-        if not config_path or not os.path.exists(config_path):
-            QMessageBox.warning(self, "错误", "请选择有效的配置文件!")
+    def on_timed_message_sent(self, message, name):
+        """
+        定时报文发送完成处理
+
+        Args:
+            message (bytes): 发送的报文
+            name (str): 报文名称
+        """
+        # 直接调用通用发送完成处理
+        self.on_message_sent(message, name)
+
+
+    def add_log_message(self, message, message_type="system"):
+        """
+        添加消息到日志区域
+
+        Args:
+            message (str): 日志消息内容
+            message_type (str): 消息类型（"send"/"receive"/"system"/"error"）
+        """
+        # 获取当前光标
+        cursor = self.log_display.textCursor()
+
+        # 移动到文档末尾
+        #cursor.movePosition(QTextCursor.End)
+
+        # 添加时间戳（如果需要）
+        if self.show_time.isChecked():
+            timestamp = datetime.now().strftime('[%H:%M:%S.%f]')[:-3]
+            cursor.insertText(timestamp + " ")
+
+        # 添加消息类型标签
+        type_labels = {
+            "send": "[发送] ",
+            "receive": "[接收] ",
+            "system": "[系统] ",
+            "error": "[错误] "
+        }
+
+        # 创建消息格式
+        format = QTextCharFormat()
+
+        # 设置不同消息类型的颜色
+        if message_type == "send":
+            format.setForeground(QBrush(QColor("blue")))
+        elif message_type == "receive":
+            format.setForeground(QBrush(QColor("green")))
+        elif message_type == "system":
+            format.setForeground(QBrush(QColor("gray")))
+
+            # 系统消息使用粗体
+            font = QFont()
+            font.setBold(True)
+            format.setFont(font)
+        elif message_type == "error":
+            format.setForeground(QBrush(QColor("red")))
+
+            # 错误消息使用粗体
+            font = QFont()
+            font.setBold(True)
+            format.setFont(font)
+
+        # 插入消息类型标签
+        cursor.setCharFormat(format)
+        cursor.insertText(type_labels.get(message_type, ""))
+
+        # 插入消息内容
+        cursor.insertText(message)
+
+        # 添加换行
+        cursor.insertText("\n")
+
+        # 如果启用了自动滚动，滚动到底部
+        if self.auto_scroll.isChecked():
+            self.log_display.setTextCursor(cursor)
+            self.log_display.ensureCursorVisible()
+
+
+    def clear_log(self):
+        """清空日志区域"""
+        self.log_display.clear()
+
+
+    def save_log(self):
+        """保存日志到文件"""
+        # 弹出保存对话框
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存日志", "", "文本文件 (*.txt);;所有文件 (*.*)")
+
+        if not file_path:
             return
 
         try:
-            # 清空现有插件列表
-            self.message_plugins.clear()
-            self.plugin_combo.clear()
+            # 获取日志文本
+            text = self.log_display.toPlainText()
 
-            # 解析配置文件
-            config = configparser.ConfigParser()
-            config.read(config_path, encoding='utf-8')
+            # 保存到文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
 
-            # 获取插件目录
-            plugins_dir = config.get('General', 'PluginsDir', fallback='plugins')
-            # 确保插件目录是绝对路径
-            if not os.path.isabs(plugins_dir):
-                base_dir = os.path.dirname(os.path.abspath(config_path))
-                plugins_dir = os.path.join(base_dir, plugins_dir)
-
-            # 获取所有可用的插件
-            for section in config.sections():
-                if section != 'General':
-                    plugin_name = section
-                    plugin_file = config.get(section, 'File', fallback=None)
-
-                    if plugin_file:
-                        # 构建插件的完整路径
-                        plugin_path = os.path.join(plugins_dir, plugin_file)
-
-                        if os.path.exists(plugin_path):
-                            # 记录插件信息
-                            self.message_plugins[plugin_name] = {
-                                'path': plugin_path,
-                                'module': None,
-                                'instance': None
-                            }
-
-                            # 添加到下拉菜单
-                            self.plugin_combo.addItem(plugin_name)
-                        else:
-                            self.add_log_message(f"警告: 插件文件不存在: {plugin_path}", "error")
-
-            if self.plugin_combo.count() > 0:
-                self.add_log_message(f"成功加载配置文件: {config_path}", "system")
-                self.statusBar.showMessage(f"已加载 {self.plugin_combo.count()} 个报文插件", 3000)
-            else:
-                self.add_log_message(f"警告: 未找到有效的插件配置", "error")
-                self.statusBar.showMessage("未找到有效的报文插件", 3000)
-
+            self.add_log_message(f"日志已保存到 {file_path}", "system")
         except Exception as e:
-            self.add_log_message(f"加载配置文件失败: {str(e)}", "error")
-            self.statusBar.showMessage(f"加载配置文件失败: {str(e)}", 3000)
+            self.add_log_message(f"保存日志失败: {str(e)}", "error")
 
-    def plugin_selected(self, index):
-        """插件选择改变时的处理"""
-        # 仅更新下拉框选择，不加载插件
-        pass
 
-    def load_selected_plugin(self):
-        """加载选中的插件"""
-        # 如果没有选择插件则返回
-        if self.plugin_combo.count() == 0:
-            return
+    def reset_counters(self):
+        """重置计数器"""
+        self.received_count = 0
+        self.sent_count = 0
+        self.update_status_counters()
+        self.add_log_message("计数器已重置", "system")
 
-        # 获取选中的插件名称
-        plugin_name = self.plugin_combo.currentText()
-        if not plugin_name or plugin_name not in self.message_plugins:
-            return
 
-        # 加载插件模块
-        try:
-            # 清除当前插件界面
-            if self.current_plugin_widget:
-                self.current_plugin_widget.setParent(None)
-                self.current_plugin_widget = None
+    def update_status_counters(self):
+        """更新状态栏中的计数器显示"""
+        self.receivedCountLabel.setText(f"接收: {self.received_count} 字节")
+        self.sentCountLabel.setText(f"发送: {self.sent_count} 字节")
 
-            plugin_info = self.message_plugins[plugin_name]
 
-            # 如果模块尚未加载，则加载它
-            if not plugin_info['module']:
-                spec = importlib.util.spec_from_file_location("plugin_module", plugin_info['path'])
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                plugin_info['module'] = module
-
-                # 创建插件实例
-                if hasattr(module, 'MessagePlugin'):
-                    plugin_info['instance'] = module.MessagePlugin()
-
-                    # 添加对该应用的引用
-                    if hasattr(plugin_info['instance'], 'set_app'):
-                        plugin_info['instance'].set_app(self)
-                else:
-                    self.add_log_message(f"错误: 插件 {plugin_name} 缺少 MessagePlugin 类", "error")
-                    return
-
-            # 获取插件实例
-            self.current_plugin = plugin_info['instance']
-
-            # 如果插件有创建UI的方法，调用它
-            if hasattr(self.current_plugin, 'create_ui'):
-                self.current_plugin_widget = self.current_plugin.create_ui()
-                if self.current_plugin_widget:
-                    # 删除所有现有的小部件
-                    while self.plugin_container_layout.count():
-                        item = self.plugin_container_layout.takeAt(0)
-                        widget = item.widget()
-                        if widget:
-                            widget.deleteLater()
-
-                    # 添加新的插件UI
-                    self.plugin_container_layout.addWidget(self.current_plugin_widget)
-
-                    # 如果串口已打开，通知插件
-                    if self.serial and self.serial.isOpen() and hasattr(self.current_plugin, 'set_serial'):
-                        self.current_plugin.set_serial(self.serial)
-
-                    self.add_log_message(f"已加载插件: {plugin_name}", "system")
-                    self.statusBar.showMessage(f"已加载插件: {plugin_name}", 3000)
-                else:
-                    self.add_log_message(f"错误: 插件 {plugin_name} 的create_ui方法未返回有效的Widget", "error")
-            else:
-                self.add_log_message(f"错误: 插件 {plugin_name} 缺少create_ui方法", "error")
-
-        except Exception as e:
-            self.add_log_message(f"加载插件失败: {str(e)}", "error")
-            self.statusBar.showMessage(f"加载插件失败: {str(e)}", 3000)
+    def closeEvent(self, event):
+        """关闭窗口事件处理"""
+        # 关闭串口
+        self.close_serial()
+        event.accept()
 
 
 def main():
@@ -1254,11 +1635,6 @@ def main():
     window = SerialToolUI()
     window.show()
 
-    # 创建插件目录（如果不存在）
-    plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plugins')
-    if not os.path.exists(plugins_dir):
-        os.makedirs(plugins_dir)
-
     # 创建示例配置文件
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'YD-G392.ini')
     if not os.path.exists(config_path):
@@ -1268,7 +1644,8 @@ def main():
 
 
 def create_example_config(file_path):
-    """创建示例配置文件
+    """
+    创建示例配置文件
 
     Args:
         file_path (str): 配置文件路径
@@ -1277,27 +1654,17 @@ def create_example_config(file_path):
 
     # 通用设置
     config['General'] = {
-        'PluginsDir': 'plugins'
+        'pluginsdir': 'plugins'
     }
 
-    # 简单报文插件
-    config['简单报文插件'] = {
-        'File': 'simple_message_plugin.py'
+    # D0h报文协议
+    config['D0h'] = {
+        'file': 'yd_g392_d0h.json'
     }
 
-    # 心跳报文插件
-    config['心跳报文插件'] = {
-        'File': 'heartbeat_plugin.py'
-    }
-
-    # RS485 ICM报文插件
-    config['RS485 ICM报文插件'] = {
-        'File': 'rs485_icm_message_plugin.py'
-    }
-
-    # 通用命令插件
-    config['通用命令插件'] = {
-        'File': 'command_plugin.py'
+    # D1h报文协议
+    config['D1h'] = {
+        'file': 'yd_g392_d1h.json'
     }
 
     # 写入配置文件

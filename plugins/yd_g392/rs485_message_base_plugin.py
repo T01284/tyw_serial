@@ -205,7 +205,7 @@ class RS485MessageBaseWidget(QWidget):
                 self.message_display.setText(hex_str)
 
                 # 设置剪贴板
-                QApplication.clipboard().setText(hex_str)
+                #QApplication.clipboard().setText(hex_str)
             else:
                 QMessageBox.warning(self, "错误", "生成报文失败")
         except Exception as e:
