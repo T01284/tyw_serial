@@ -88,6 +88,8 @@ class ProtocolParser(QObject):
             start_bytes = message_format.get('start_bytes', ["0x59", "0x44"])
             message_id = message_format.get('message_id', "0x00")
             end_bytes = message_format.get('end_bytes', ["0x4B", "0x4A"])
+            # 新增: 检查是否使用2字节数据长度
+            length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
 
             # 转换为字节格式
             start_bytes_value = bytes([int(b, 16) for b in start_bytes])
@@ -103,26 +105,47 @@ class ProtocolParser(QObject):
                 # 提取数据部分（不含报文头、报文尾和校验码）
                 data_start = len(start_bytes_value)
                 data_end = len(message_bytes) - len(end_bytes_value) - 2  # 减去2字节CRC
-                data_bytes = message_bytes[data_start:data_end]
 
                 # 检查报文ID
-                if data_bytes[0] == message_id_value:
-                    # 解析字段
-                    return self.parse_fields(protocol_data, data_bytes[2:], raw_message=message_bytes)
+                if message_bytes[data_start] == message_id_value:
+                    # 根据长度字节数提取数据
+                    if length_bytes == 1:
+                        # 单字节数据长度
+                        data_bytes = message_bytes[data_start:data_end]
+                        return self.parse_fields(protocol_data, data_bytes[2:], raw_message=message_bytes)
+                    else:
+                        # 两字节数据长度(小端格式)
+                        data_length = message_bytes[data_start + 1] + (message_bytes[data_start + 2] << 8)
+                        # 实际数据从第4个字节开始(报文头2字节+ID 1字节+长度2字节)
+                        data_bytes = message_bytes[data_start:data_start + 3 + data_length]
+                        return self.parse_fields(protocol_data, data_bytes[3:], raw_message=message_bytes)
 
             # 情况2: 只有报文ID，没有完整的报文头尾
             else:
                 # 尝试从任意位置查找报文ID
                 for i in range(len(message_bytes) - 2):
                     if message_bytes[i] == message_id_value:
-                        # 检查后面的一个字节是否是长度字段
-                        length = message_bytes[i + 1]
+                        if length_bytes == 1:
+                            # 单字节长度格式
+                            # 检查后面的一个字节是否是长度字段
+                            length = message_bytes[i + 1]
 
-                        # 如果剩余数据长度符合长度字段，尝试解析
-                        if i + 2 + length <= len(message_bytes):
-                            data_bytes = message_bytes[i + 2:i + 2 + length]
-                            return self.parse_fields(protocol_data, data_bytes,
-                                                     raw_message=message_bytes[i:i + 2 + length])
+                            # 如果剩余数据长度符合长度字段，尝试解析
+                            if i + 2 + length <= len(message_bytes):
+                                data_bytes = message_bytes[i + 2:i + 2 + length]
+                                return self.parse_fields(protocol_data, data_bytes,
+                                                         raw_message=message_bytes[i:i + 2 + length])
+                        else:
+                            # 两字节长度格式(小端)
+                            if i + 2 < len(message_bytes):
+                                # 读取两字节长度(小端格式)
+                                length = message_bytes[i + 1] + (message_bytes[i + 2] << 8)
+
+                                # 如果剩余数据长度符合长度字段，尝试解析
+                                if i + 3 + length <= len(message_bytes):
+                                    data_bytes = message_bytes[i + 3:i + 3 + length]
+                                    return self.parse_fields(protocol_data, data_bytes,
+                                                             raw_message=message_bytes[i:i + 3 + length])
 
             return None
 
@@ -272,11 +295,12 @@ class ProtocolParser(QObject):
 
                     # 保存到结果
                     result['fields'][field_id] = {'name': field_name,
-                        'value': value,
-                        'raw_value': value if precision == 1 and offset == 0 else round((value - offset) / precision),
-                        'hex': f"0x{value if precision == 1 and offset == 0 else round((value - offset) / precision):X}",
-                        'description': description
-                    }
+                                                  'value': value,
+                                                  'raw_value': value if precision == 1 and offset == 0 else round(
+                                                      (value - offset) / precision),
+                                                  'hex': f"0x{value if precision == 1 and offset == 0 else round((value - offset) / precision):X}",
+                                                  'description': description
+                                                  }
 
                 elif field_type == 'Signed':
                     # 根据长度解析有符号整数
@@ -290,7 +314,8 @@ class ProtocolParser(QObject):
                         # 转换为有符号数
                         unsigned_value = int.from_bytes(field_bytes, byteorder='little')
                         bit_length = len(field_bytes) * 8
-                        value = unsigned_value if unsigned_value < (1 << (bit_length - 1)) else unsigned_value - (1 << bit_length)
+                        value = unsigned_value if unsigned_value < (1 << (bit_length - 1)) else unsigned_value - (
+                                    1 << bit_length)
 
                     # 应用精度和偏移
                     if precision != 1 or offset != 0:
@@ -343,6 +368,8 @@ class ProtocolParser(QObject):
             start_bytes = message_format.get('start_bytes', ["0x59", "0x44"])
             message_id = message_format.get('message_id', "0x00")
             end_bytes = message_format.get('end_bytes', ["0x4B", "0x4A"])
+            # 新增: 检查是否使用2字节数据长度
+            length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
 
             # 转换为字节格式
             start_bytes_value = bytes([int(b, 16) for b in start_bytes])
@@ -466,13 +493,24 @@ class ProtocolParser(QObject):
             message_bytes.append(message_id_value)
 
             # 添加数据长度
-            message_bytes.append(len(data_bytes))
+            if length_bytes == 1:
+                # 单字节长度
+                message_bytes.append(len(data_bytes))
+            else:
+                # 两字节长度(小端)
+                length_value = len(data_bytes)
+                message_bytes.append(length_value & 0xFF)  # 低字节
+                message_bytes.append((length_value >> 8) & 0xFF)  # 高字节
 
             # 添加数据
             message_bytes.extend(data_bytes)
 
             # 计算CRC校验
-            crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+            if length_bytes == 1:
+                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+            else:
+                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+
             message_bytes.extend(crc.to_bytes(2, byteorder='little'))
 
             # 添加报文尾

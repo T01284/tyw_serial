@@ -1284,7 +1284,7 @@
   ],
   "message_format": {
     "start_bytes": ["0x59", "0x44"],
-    "message_id": "0xB4",
+    "message_id": "0xB4", "length_bytes": 2,
     "data_length": "0x4B",
     "end_bytes": ["0x4B", "0x4A"],
     "checksum": "CRC16-modbus"

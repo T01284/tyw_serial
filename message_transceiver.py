@@ -152,6 +152,16 @@ class MessageReceiver(QObject):
         super().__init__()
         self.buffer = bytearray()
         self.max_buffer_size = 4096  # 最大缓冲区大小
+        self.use_two_byte_length = True  # 新增：是否使用两字节长度（小端格式）
+
+    def set_length_format(self, use_two_bytes=True):
+        """
+        设置数据长度字段格式
+
+        Args:
+            use_two_bytes (bool): 是否使用两字节长度
+        """
+        self.use_two_byte_length = use_two_bytes
 
     def process_data(self, data):
         """
@@ -176,16 +186,32 @@ class MessageReceiver(QObject):
         start_index = self.buffer.find(b'\x59\x44')
 
         while start_index != -1:
-            # 检查缓冲区是否足够长，至少包含报文头、ID、长度字段
-            if start_index + 4 > len(self.buffer):
-                break
+            # 根据使用的长度字段格式决定处理方式
+            if self.use_two_byte_length:
+                # 两字节长度格式（小端）
+                # 检查缓冲区是否足够长，至少包含报文头、ID、长度字段(2字节)
+                if start_index + 5 > len(self.buffer):
+                    break
 
-            # 获取报文长度
-            message_id = self.buffer[start_index + 2]
-            data_length = self.buffer[start_index + 3]
+                # 获取报文ID和长度
+                message_id = self.buffer[start_index + 2]
+                # 小端格式：低字节在前，高字节在后
+                data_length = self.buffer[start_index + 3] + (self.buffer[start_index + 4] << 8)
 
-            # 计算完整报文长度：报文头(2) + ID(1) + 长度(1) + 数据(n) + CRC(2) + 报文尾(2)
-            total_length = 2 + 1 + 1 + data_length + 2 + 2
+                # 计算完整报文长度：报文头(2) + ID(1) + 长度(2) + 数据(n) + CRC(2) + 报文尾(2)
+                total_length = 2 + 1 + 2 + data_length + 2 + 2
+            else:
+                # 单字节长度格式
+                # 检查缓冲区是否足够长，至少包含报文头、ID、长度字段
+                if start_index + 4 > len(self.buffer):
+                    break
+
+                # 获取报文长度
+                message_id = self.buffer[start_index + 2]
+                data_length = self.buffer[start_index + 3]
+
+                # 计算完整报文长度：报文头(2) + ID(1) + 长度(1) + 数据(n) + CRC(2) + 报文尾(2)
+                total_length = 2 + 1 + 1 + data_length + 2 + 2
 
             # 检查缓冲区是否包含完整报文
             if start_index + total_length <= len(self.buffer):
