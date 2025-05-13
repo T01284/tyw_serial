@@ -1256,7 +1256,6 @@ class SerialToolUI(QMainWindow):
         if load_config_btn:
             load_config_btn.clicked.connect(lambda: self.load_protocol_config(protocol_id))
 
-
     def generate_protocol_message(self, protocol_id):
         """
         生成协议报文
@@ -1264,12 +1263,48 @@ class SerialToolUI(QMainWindow):
         Args:
             protocol_id (str): 协议ID
         """
+        print("\n当前需要处理的协议:",protocol_id)
         try:
-            # 获取字段值
-            field_values = self.protocol_ui_generator.get_field_values()
+            # 获取字段值 - 这会获取所有协议的字段值
+            all_field_values = self.protocol_ui_generator.get_field_values(protocol_id)
 
-            # 生成报文
-            message = self.protocol_parser.generate_message(protocol_id, field_values)
+            # 从所有字段值中过滤出当前协议的字段值
+            protocol_field_values = {}
+
+            # 输出当前协议的所有可能字段ID
+            print("\n当前协议可能的字段ID列表:")
+            protocol_data = self.config_parser.get_protocol(protocol_id)
+            if protocol_data:
+                fields = protocol_data.get('fields', [])
+                for field in fields:
+                    field_id = field.get('id', '')
+                    field_name = field.get('name', '')
+                    new_field_id = f"{protocol_id}_{field_id}"
+                    print(f"  {new_field_id} ({field_name})")
+
+                    # 检查这个字段是否存在于all_field_values中
+                    if new_field_id in all_field_values:
+                        # 保存原始字段ID的映射，用于生成报文
+                        protocol_field_values[field_id] = all_field_values[new_field_id]
+                        print(f"  找到字段值: {field_id} = {all_field_values[new_field_id]} (来自 {new_field_id})")
+                    else:
+                        print(f"  未找到字段值: {new_field_id}")
+
+                    # 特别检查D3h_B1[0:1]字段（整车ACC状态）
+                    if field_id == "B1[0:1]" and protocol_id == "D3h":
+                        target_key = "D3h_B1[0:1]"
+                        if target_key in all_field_values:
+                            value = all_field_values[target_key]
+                            protocol_field_values["B1[0:1]"] = value
+                            print(f"  特别处理: 找到整车ACC状态值 = {value}")
+
+            # 打印最终要使用的字段值
+            print("\n最终使用的字段值:")
+            for field_id, value in protocol_field_values.items():
+                print(f"  {field_id} = {value}")
+
+            # 使用过滤后的字段值生成报文
+            message = self.protocol_parser.generate_message(protocol_id, protocol_field_values)
 
             if message:
                 # 弹出报文预览对话框
@@ -1294,7 +1329,7 @@ class SerialToolUI(QMainWindow):
         """
         try:
             # 获取字段值
-            field_values = self.protocol_ui_generator.get_field_values()
+            field_values = self.protocol_ui_generator.get_field_values(protocol_id)
 
             # 生成报文
             message = self.protocol_parser.generate_message(protocol_id, field_values)
@@ -1329,7 +1364,7 @@ class SerialToolUI(QMainWindow):
 
         try:
             # 获取字段值
-            field_values = self.protocol_ui_generator.get_field_values()
+            field_values = self.protocol_ui_generator.get_field_values(protocol_id)
 
             # 保存到文件
             with open(file_path, 'w', encoding='utf-8') as f:

@@ -30,6 +30,260 @@ class ProtocolParser(QObject):
         """
         self.protocols = protocols
 
+    def generate_message(self, protocol_id, field_values):
+        """
+        根据协议和字段值生成报文
+
+        Args:
+            protocol_id (str): 协议ID
+            field_values (dict): 字段值字典 {field_id: value}
+
+        Returns:
+            bytes: 生成的报文数据，生成失败则返回None
+        """
+        try:
+            # 打印接收到的字段值
+            print("\n========== 生成报文调试信息 ==========")
+            print(f"协议ID: {protocol_id}")
+            print("接收到的字段值:")
+            for field_id, value in field_values.items():
+                print(f"  {field_id} = {value}")
+
+            # 获取协议数据
+            protocol_data = self.protocols.get(protocol_id)
+            if not protocol_data:
+                print("错误: 未找到协议数据")
+                return None
+
+            # 打印字段ID映射，便于调试
+            print("字段ID映射:")
+            for field in protocol_data.get('fields', []):
+                field_id = field.get('id', '')
+                print(f"  {protocol_id}_{field_id} -> {field_id}")
+
+            # 获取报文格式信息
+            message_format = protocol_data.get('message_format', {})
+            start_bytes = message_format.get('start_bytes', ["0x59", "0x44"])
+            message_id = message_format.get('message_id', "0x00")
+            end_bytes = message_format.get('end_bytes', ["0x4B", "0x4A"])
+            # 新增: 检查是否使用2字节数据长度
+            length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
+
+            print(f"报文格式: ID={message_id}, 长度字节={length_bytes}")
+
+            # 转换为字节格式
+            start_bytes_value = bytes([int(b, 16) for b in start_bytes])
+            message_id_value = int(message_id, 16)
+            end_bytes_value = bytes([int(b, 16) for b in end_bytes])
+
+            # 创建数据部分
+            data_bytes = bytearray()
+
+            # 根据协议定义的字段长度创建数据缓冲区
+            max_byte_pos = 0
+            fields = protocol_data.get('fields', [])
+            for field in fields:
+                byte_position = field.get('byte_position', [])
+                if isinstance(byte_position, list) and byte_position:
+                    max_byte_pos = max(max_byte_pos, max(byte_position) + 1)
+                elif isinstance(byte_position, int):
+                    max_byte_pos = max(max_byte_pos, byte_position + 1)
+
+            print(f"数据缓冲区大小: {max_byte_pos} 字节")
+
+            # 初始化所有字节为0x00 (默认值为0)
+            data_bytes = bytearray([0x00] * max_byte_pos)
+
+            # 填充字段值
+            print("\n字段处理详情:")
+            for field in fields:
+                field_id = field.get('id', '')
+                field_name = field.get('name', '')
+                field_value = field_values.get(field_id)
+
+                # 特别检查特定字段
+                if field_id == "B1[0:1]" or "整车ACC状态" in field_name:
+                    print(f"处理特殊字段 {field_id} ({field_name}), 值 = {field_value}")
+
+                # 新的字段ID格式
+                new_field_id = f"{protocol_id}_{field_id}"
+
+                print(f"\n处理字段: {field_id} ({field_name})")
+                print(f"  新ID: {new_field_id}")
+                print(f"  输入值: {field_value}")
+
+                if field_value is None:
+                    print(f"  跳过: 未提供值")
+                    continue
+
+                field_type = field.get('type', 'Unsigned')
+                field_length = field.get('length', 1)
+                precision = field.get('precision', 1)
+                offset = field.get('offset', 0)
+                byte_position = field.get('byte_position', [])
+                bit_position = field.get('bit_position', None)
+
+                print(f"  类型: {field_type}, 长度: {field_length}, 精度: {precision}, 偏移: {offset}")
+                print(f"  字节位置: {byte_position}, 位位置: {bit_position}")
+
+                try:
+                    # 处理不同的字段类型
+                    if field_type in ['Unsigned', 'Signed']:
+                        # 将字符串转换为数值
+                        try:
+                            if not field_value or field_value.strip() == '':
+                                # 字段值为空时使用默认值0
+                                numeric_value = 0
+                            elif field_value.startswith('0x'):
+                                # 十六进制
+                                numeric_value = int(field_value, 16)
+                            else:
+                                # 十进制
+                                numeric_value = float(field_value)
+
+                                # 应用精度和偏移的逆运算
+                                if precision != 1 or offset != 0:
+                                    numeric_value = (numeric_value - offset) / precision
+
+                                # 转换为整数
+                                numeric_value = int(round(numeric_value))
+
+                            print(f"  转换后的数值: {numeric_value} (0x{numeric_value:X})")
+
+                        except ValueError as e:
+                            # 如果无法转换为数值，跳过
+                            print(f"  错误: 无法将 '{field_value}' 转换为数值: {str(e)}")
+                            continue
+
+                        # 根据字段长度转换为字节
+                        if field_length == 1:
+                            value_bytes = bytes([numeric_value & 0xFF])
+                        elif field_length == 2:
+                            value_bytes = struct.pack('<H', numeric_value & 0xFFFF)
+                        elif field_length == 4:
+                            value_bytes = struct.pack('<I', numeric_value & 0xFFFFFFFF)
+                        else:
+                            value_bytes = numeric_value.to_bytes(field_length, byteorder='little')
+
+                        print(f"  字节值: {' '.join([f'{b:02X}' for b in value_bytes])}")
+
+                        # 填充到数据字节
+                        if isinstance(byte_position, list):
+                            # 多字节字段
+                            print(f"  填充多字节字段:")
+                            for i, pos in enumerate(byte_position):
+                                if i < len(value_bytes) and pos < len(data_bytes):
+                                    print(f"    位置 {pos}: {data_bytes[pos]:02X} -> {value_bytes[i]:02X}")
+                                    data_bytes[pos] = value_bytes[i]
+
+                        elif isinstance(byte_position, int):
+                            # 单字节字段，但可能只使用部分位
+                            if byte_position >= len(data_bytes):
+                                print(f"  错误: 字节位置 {byte_position} 超出缓冲区大小 {len(data_bytes)}")
+                                continue
+
+                            if bit_position:
+                                # 有位定义，只修改指定位
+                                print(f"  有位定义, 修改指定位:")
+                                if isinstance(bit_position, list):
+                                    # 多位
+                                    mask = 0
+                                    for bit in bit_position:
+                                        mask |= (1 << bit)
+
+                                    print(f"    位掩码: 0x{mask:02X}")
+                                    print(f"    原始值: 0x{data_bytes[byte_position]:02X}")
+
+                                    # 清除原有位
+                                    data_bytes[byte_position] &= ~mask
+
+                                    # 设置新值
+                                    min_bit = min(bit_position)
+                                    data_bytes[byte_position] |= ((numeric_value << min_bit) & mask)
+
+                                    print(f"    新值: 0x{data_bytes[byte_position]:02X}")
+
+                                elif isinstance(bit_position, int):
+                                    # 单位
+                                    print(f"    位置: {bit_position}")
+                                    print(f"    原始值: 0x{data_bytes[byte_position]:02X}")
+
+                                    # 清除原有位
+                                    data_bytes[byte_position] &= ~(1 << bit_position)
+
+                                    # 设置新值
+                                    if numeric_value:
+                                        data_bytes[byte_position] |= (1 << bit_position)
+
+                                    print(f"    新值: 0x{data_bytes[byte_position]:02X}")
+                            else:
+                                # 没有位定义，使用整个字节
+                                print(
+                                    f"  填充单字节: 位置 {byte_position}: {data_bytes[byte_position]:02X} -> {value_bytes[0]:02X}")
+                                data_bytes[byte_position] = value_bytes[0]
+
+                    else:
+                        # 其他类型，保存原始数据
+                        print(f"  使用原始值: {field_value}")
+                        # 处理其他类型的逻辑...
+
+                except Exception as e:
+                    print(f"  生成字段错误: {str(e)}")
+                    continue
+
+            # 打印最终数据
+            print("\n最终数据字节:")
+            hex_data = ' '.join([f'{b:02X}' for b in data_bytes])
+            print(f"  {hex_data}")
+
+            # 构建完整报文
+            message_bytes = bytearray()
+
+            # 添加报文头
+            message_bytes.extend(start_bytes_value)
+
+            # 添加报文ID
+            message_bytes.append(message_id_value)
+
+            # 添加数据长度
+            if length_bytes == 1:
+                # 单字节长度
+                message_bytes.append(len(data_bytes))
+            else:
+                # 两字节长度(小端)
+                length_value = len(data_bytes)
+                message_bytes.append(length_value & 0xFF)  # 低字节
+                message_bytes.append((length_value >> 8) & 0xFF)  # 高字节
+
+            # 添加数据
+            message_bytes.extend(data_bytes)
+
+            # 计算CRC校验
+            if length_bytes == 1:
+                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+            else:
+                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+
+            message_bytes.extend(crc.to_bytes(2, byteorder='little'))
+
+            # 添加报文尾
+            message_bytes.extend(end_bytes_value)
+
+            # 打印完整报文
+            print("\n完整报文:")
+            hex_message = ' '.join([f'{b:02X}' for b in message_bytes])
+            print(f"  {hex_message}")
+            print("====================================\n")
+
+            return bytes(message_bytes)
+
+        except Exception as e:
+            print(f"生成报文错误: {str(e)}")
+            import traceback
+            traceback.print_exc()  # 打印完整的异常堆栈跟踪，以便更好地调试
+            print("====================================\n")
+            return None
+
     def parse_message(self, message_bytes):
         """
         解析报文
@@ -346,181 +600,80 @@ class ProtocolParser(QObject):
 
         return result
 
-    def generate_message(self, protocol_id, field_values):
+    def generate_protocol_message(self, protocol_id):
         """
-        根据协议和字段值生成报文
+        生成协议报文
 
         Args:
             protocol_id (str): 协议ID
-            field_values (dict): 字段值字典 {field_id: value}
-
-        Returns:
-            bytes: 生成的报文数据，生成失败则返回None
         """
         try:
+            print(f"当前需要处理的协议: {protocol_id}")
+
             # 获取协议数据
-            protocol_data = self.protocols.get(protocol_id)
+            protocol_data = self.config_parser.get_protocol(protocol_id)
             if not protocol_data:
-                return None
+                self.add_log_message(f"错误: 未找到协议 {protocol_id} 的数据", "error")
+                return
 
-            # 获取报文格式信息
-            message_format = protocol_data.get('message_format', {})
-            start_bytes = message_format.get('start_bytes', ["0x59", "0x44"])
-            message_id = message_format.get('message_id', "0x00")
-            end_bytes = message_format.get('end_bytes', ["0x4B", "0x4A"])
-            # 新增: 检查是否使用2字节数据长度
-            length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
-
-            # 转换为字节格式
-            start_bytes_value = bytes([int(b, 16) for b in start_bytes])
-            message_id_value = int(message_id, 16)
-            end_bytes_value = bytes([int(b, 16) for b in end_bytes])
-
-            # 创建数据部分
-            data_bytes = bytearray()
-
-            # 根据协议定义的字段长度创建数据缓冲区
-            max_byte_pos = 0
+            # 输出当前协议的字段列表
+            print("当前协议可能的字段ID列表:")
             fields = protocol_data.get('fields', [])
             for field in fields:
-                byte_position = field.get('byte_position', [])
-                if isinstance(byte_position, list) and byte_position:
-                    max_byte_pos = max(max_byte_pos, max(byte_position) + 1)
-                elif isinstance(byte_position, int):
-                    max_byte_pos = max(max_byte_pos, byte_position + 1)
-
-            # 初始化所有字节为0xFF (无效值)
-            data_bytes = bytearray([0xFF] * max_byte_pos)
-
-            # 填充字段值
-            for field in fields:
                 field_id = field.get('id', '')
-                field_value = field_values.get(field_id)
+                field_name = field.get('name', '')
+                new_field_id = f"{protocol_id}_{field_id}"
+                print(f"  {new_field_id} ({field_name})")
 
-                if field_value is None:
-                    continue
+            # 只获取当前协议的字段值，使用专门的错误处理
+            try:
+                protocol_field_values_with_prefix = self.protocol_ui_generator.get_field_values(protocol_id)
+            except Exception as e:
+                print(f"获取字段值时出错: {str(e)}")
+                self.add_log_message(f"获取字段值时出错: {str(e)}", "error")
+                return
 
-                field_type = field.get('type', 'Unsigned')
-                field_length = field.get('length', 1)
-                precision = field.get('precision', 1)
-                offset = field.get('offset', 0)
-                byte_position = field.get('byte_position', [])
-                bit_position = field.get('bit_position', None)
+            # 转换为不带前缀的字段值，用于生成报文
+            protocol_field_values = {}
+            prefix_len = len(protocol_id) + 1  # 协议ID + 下划线的长度
 
-                try:
-                    # 处理不同的字段类型
-                    if field_type in ['Unsigned', 'Signed']:
-                        # 将字符串转换为数值
-                        try:
-                            if field_value.startswith('0x'):
-                                # 十六进制
-                                numeric_value = int(field_value, 16)
-                            else:
-                                # 十进制
-                                numeric_value = float(field_value)
+            for field_id, value in protocol_field_values_with_prefix.items():
+                # 移除协议前缀
+                if field_id.startswith(f"{protocol_id}_"):
+                    original_id = field_id[prefix_len:]
+                    protocol_field_values[original_id] = value
+                    print(f"字段映射: {field_id} -> {original_id} = {value}")
 
-                                # 应用精度和偏移的逆运算
-                                if precision != 1 or offset != 0:
-                                    numeric_value = (numeric_value - offset) / precision
-
-                                # 转换为整数
-                                numeric_value = int(round(numeric_value))
-
-                        except ValueError:
-                            # 如果无法转换为数值，跳过
-                            continue
-
-                        # 根据字段长度转换为字节
-                        if field_length == 1:
-                            value_bytes = bytes([numeric_value & 0xFF])
-                        elif field_length == 2:
-                            value_bytes = struct.pack('<H', numeric_value & 0xFFFF)
-                        elif field_length == 4:
-                            value_bytes = struct.pack('<I', numeric_value & 0xFFFFFFFF)
-                        else:
-                            value_bytes = numeric_value.to_bytes(field_length, byteorder='little')
-
-                        # 填充到数据字节
-                        if isinstance(byte_position, list):
-                            # 多字节字段
-                            for i, pos in enumerate(byte_position):
-                                if i < len(value_bytes) and pos < len(data_bytes):
-                                    data_bytes[pos] = value_bytes[i]
-
-                        elif isinstance(byte_position, int):
-                            # 单字节字段，但可能只使用部分位
-                            if byte_position >= len(data_bytes):
-                                continue
-
-                            if bit_position:
-                                # 有位定义，只修改指定位
-                                if isinstance(bit_position, list):
-                                    # 多位
-                                    mask = 0
-                                    for bit in bit_position:
-                                        mask |= (1 << bit)
-
-                                    # 清除原有位
-                                    data_bytes[byte_position] &= ~mask
-
-                                    # 设置新值
-                                    min_bit = min(bit_position)
-                                    data_bytes[byte_position] |= ((numeric_value << min_bit) & mask)
-
-                                elif isinstance(bit_position, int):
-                                    # 单位
-                                    # 清除原有位
-                                    data_bytes[byte_position] &= ~(1 << bit_position)
-
-                                    # 设置新值
-                                    if numeric_value:
-                                        data_bytes[byte_position] |= (1 << bit_position)
-                            else:
-                                # 没有位定义，使用整个字节
-                                data_bytes[byte_position] = value_bytes[0]
-
-                except Exception as e:
-                    print(f"生成字段 {field_id} 错误: {str(e)}")
-                    continue
-
-            # 构建完整报文
-            message_bytes = bytearray()
-
-            # 添加报文头
-            message_bytes.extend(start_bytes_value)
-
-            # 添加报文ID
-            message_bytes.append(message_id_value)
-
-            # 添加数据长度
-            if length_bytes == 1:
-                # 单字节长度
-                message_bytes.append(len(data_bytes))
+            # 打印最终要使用的字段值
+            print("\n最终使用的字段值:")
+            if protocol_field_values:
+                for field_id, value in protocol_field_values.items():
+                    print(f"  {field_id} = {value}")
             else:
-                # 两字节长度(小端)
-                length_value = len(data_bytes)
-                message_bytes.append(length_value & 0xFF)  # 低字节
-                message_bytes.append((length_value >> 8) & 0xFF)  # 高字节
+                print("  无有效字段值")
 
-            # 添加数据
-            message_bytes.extend(data_bytes)
+            # 使用过滤后的字段值生成报文
+            try:
+                message = self.protocol_parser.generate_message(protocol_id, protocol_field_values)
 
-            # 计算CRC校验
-            if length_bytes == 1:
-                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
-            else:
-                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
-
-            message_bytes.extend(crc.to_bytes(2, byteorder='little'))
-
-            # 添加报文尾
-            message_bytes.extend(end_bytes_value)
-
-            return bytes(message_bytes)
+                if message:
+                    # 弹出报文预览对话框
+                    from message_dialog import MessagePreviewDialog
+                    dialog = MessagePreviewDialog(message, protocol_id, self)
+                    if dialog.exec_() == QDialog.Accepted:
+                        # 发送报文
+                        self.send_message(message, f"{protocol_id}报文")
+                        self.add_log_message(f"已发送{protocol_id}报文", "system")
+                else:
+                    QMessageBox.warning(self, "错误", "生成报文失败，请检查字段值!")
+            except Exception as e:
+                print(f"生成或发送报文时出错: {str(e)}")
+                self.add_log_message(f"生成报文时出错: {str(e)}", "error")
 
         except Exception as e:
-            print(f"生成报文错误: {str(e)}")
-            return None
+            print(f"生成报文过程中出现未处理的错误: {str(e)}")
+            self.add_log_message(f"生成报文错误: {str(e)}", "error")
+
 
     def calculate_crc16(self, data):
         """
