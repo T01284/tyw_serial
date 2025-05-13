@@ -382,6 +382,8 @@ class TimedMessagesManager(QWidget):
                 QMessageBox.critical(self, "加载失败", f"加载配置失败: {str(e)}")
 
 
+# 在tyw_serial.py中，修改MessageDisplayManager类，添加定时发送功能
+
 class MessageDisplayManager(QTabWidget):
     """报文显示管理器，显示所有协议的接收报文"""
 
@@ -476,6 +478,11 @@ class MessageDisplayManager(QTabWidget):
             copy_btn = QPushButton("复制到发送区")
             copy_btn.clicked.connect(lambda checked, pid=protocol_id: self.copy_to_send_area(pid))
             button_layout.addWidget(copy_btn)
+
+            # 添加定时发送按钮
+            timed_send_btn = QPushButton("定时发送")
+            timed_send_btn.clicked.connect(lambda checked, pid=protocol_id: self.add_to_timed_task(pid))
+            button_layout.addWidget(timed_send_btn)
 
             # 导出按钮
             export_btn = QPushButton("导出日志")
@@ -700,6 +707,115 @@ class MessageDisplayManager(QTabWidget):
             else:
                 QMessageBox.information(self, "提示", f"报文已复制，但未找到快速发送区。\n\n报文内容：{raw_message}")
 
+    def add_to_timed_task(self, protocol_id):
+        """
+        将选中的报文添加到定时任务
+
+        Args:
+            protocol_id (str): 协议ID
+        """
+        if protocol_id not in self.protocol_tabs:
+            return
+
+        protocol_list = self.protocol_tabs[protocol_id]
+        selected_items = protocol_list.selectedItems()
+
+        if not selected_items:
+            QMessageBox.information(self, "提示", "请先选择一条报文记录。")
+            return
+
+        # 获取选中行
+        row = selected_items[0].row()
+
+        # 获取对应的报文数据
+        if row < len(self.received_messages[protocol_id]):
+            message_data = self.received_messages[protocol_id][row]
+
+            # 弹出定时设置对话框
+            from PyQt5.QtWidgets import QInputDialog
+            interval, ok = QInputDialog.getInt(
+                self, "设置定时间隔", "请输入定时发送间隔(毫秒):",
+                1000, 10, 60000, 100)
+
+            if ok:
+                # 获取原始报文
+                raw_message = message_data.get('raw_message', '')
+
+                if not raw_message:
+                    QMessageBox.warning(self, "错误", "无有效报文可添加")
+                    return
+
+                # 移除空格
+                raw_message = raw_message.replace(" ", "")
+
+                try:
+                    # 将十六进制字符串转换为字节
+                    message_bytes = bytes.fromhex(raw_message)
+
+                    # 获取主窗口
+                    main_window = self.window()
+                    if not hasattr(main_window, 'timed_messages_manager'):
+                        QMessageBox.warning(self, "错误", "找不到定时任务管理器")
+                        return
+
+                    # 获取报文信息
+                    message_id = message_data.get('message_id', '')
+                    protocol_name = message_data.get('protocol_name', '')
+
+                    # 创建任务名称
+                    task_name = f"{protocol_id}-{message_id}"
+                    if protocol_name:
+                        task_name += f"-{protocol_name}"
+
+                    # 检查是否已有相同协议ID的任务
+                    from message_transceiver import TimedMessage
+
+                    # 查找是否已存在相同协议ID的任务
+                    found = False
+                    for msg in main_window.timed_messages_manager.timed_messages:
+                        if msg.protocol_id == protocol_id:
+                            # 更新已存在的任务
+                            msg.name = task_name
+                            msg.message = message_bytes
+                            msg.interval = interval
+                            msg.enabled = True
+                            found = True
+
+                            # 添加日志
+                            if hasattr(main_window, 'add_log_message'):
+                                main_window.add_log_message(f"已更新协议 {protocol_id} 的定时任务", "system")
+                            else:
+                                QMessageBox.information(self, "成功", f"已更新协议 {protocol_id} 的定时任务")
+                            break
+
+                    # 如果不存在则创建新任务
+                    if not found:
+                        timed_message = TimedMessage(
+                            name=task_name,
+                            message=message_bytes,
+                            interval=interval,
+                            enabled=True,
+                            protocol_id=protocol_id
+                        )
+                        main_window.timed_messages_manager.timed_messages.append(timed_message)
+
+                        # 添加日志
+                        if hasattr(main_window, 'add_log_message'):
+                            main_window.add_log_message(f"已创建协议 {protocol_id} 的定时任务", "system")
+                        else:
+                            QMessageBox.information(self, "成功", f"已创建协议 {protocol_id} 的定时任务")
+
+                    # 更新表格显示
+                    main_window.timed_messages_manager.update_table()
+
+                    # 如果串口已打开，启动定时器
+                    if main_window.timed_messages_manager.timer and not main_window.timed_messages_manager.timer.isActive():
+                        if hasattr(main_window, 'serial') and main_window.serial and main_window.serial.isOpen():
+                            main_window.timed_messages_manager.timer.start(10)
+
+                except Exception as e:
+                    QMessageBox.critical(self, "错误", f"添加定时任务失败: {str(e)}")
+
     def export_general_log(self):
         """导出通用接收日志"""
         file_path, _ = QFileDialog.getSaveFileName(
@@ -767,9 +883,11 @@ class MessageDisplayManager(QTabWidget):
 
                     if time_item and message_id_item and type_item and fields_item:
                         if file_path.lower().endswith('.csv'):
-                            f.write(f"{time_item.text()},{message_id_item.text()},{type_item.text()},\"{fields_item.text()}\"\n")
+                            f.write(
+                                f"{time_item.text()},{message_id_item.text()},{type_item.text()},\"{fields_item.text()}\"\n")
                         else:
-                            f.write(f"{time_item.text()}\t{message_id_item.text()}\t{type_item.text()}\t{fields_item.text()}\n")
+                            f.write(
+                                f"{time_item.text()}\t{message_id_item.text()}\t{type_item.text()}\t{fields_item.text()}\n")
 
             QMessageBox.information(self, "导出成功", f"日志已导出到: {file_path}")
         except Exception as e:
@@ -789,6 +907,8 @@ class MessageDisplayManager(QTabWidget):
         if tab_text.startswith("* "):
             clean_text = tab_text[2:]
             self.setTabText(index, clean_text)
+
+
 class SerialToolUI(QMainWindow):
     """串口通信工具主窗口"""
 

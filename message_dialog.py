@@ -17,97 +17,63 @@ from PyQt5.QtGui import QRegExpValidator, QIntValidator, QDoubleValidator, QColo
 from message_transceiver import TimedMessage
 
 
-class TimedMessageDialog(QDialog):
-    """定时报文编辑对话框"""
+# 在message_transceiver.py中，确保TimedMessage类能够正确处理protocol_id
 
-    def __init__(self, parent=None, timed_message=None):
-        super().__init__(parent)
-        self.setWindowTitle("定时报文设置")
-        self.resize(500, 300)
+class TimedMessage:
+    """定时发送报文"""
 
-        self.timed_message = timed_message or TimedMessage()
+    def __init__(self, name="", message=bytes(), interval=1000, enabled=False, protocol_id=""):
+        self.name = name  # 报文名称
+        self.message = message  # 报文内容
+        self.interval = interval  # 发送间隔(ms)
+        self.enabled = enabled  # 是否启用
+        self.last_sent = 0  # 上次发送时间
+        self.protocol_id = protocol_id  # 协议ID
 
-        # 创建布局
-        layout = QVBoxLayout(self)
-
-        # 创建表单
-        form_layout = QFormLayout()
-        layout.addLayout(form_layout)
-
-        # 报文名称
-        self.name_edit = QLineEdit(self.timed_message.name)
-        form_layout.addRow("报文名称:", self.name_edit)
-
-        # 报文内容
-        self.message_edit = QTextEdit()
-        if self.timed_message.message:
-            hex_text = ' '.join([f"{b:02X}" for b in self.timed_message.message])
-            self.message_edit.setPlainText(hex_text)
-        form_layout.addRow("报文内容(十六进制):", self.message_edit)
-
-        # 发送间隔
-        self.interval_spinbox = QSpinBox()
-        self.interval_spinbox.setRange(10, 60000)  # 10ms到60s
-        self.interval_spinbox.setValue(self.timed_message.interval)
-        self.interval_spinbox.setSuffix(" ms")
-        form_layout.addRow("发送间隔:", self.interval_spinbox)
-
-        # 是否启用
-        self.enabled_checkbox = QCheckBox("启用定时发送")
-        self.enabled_checkbox.setChecked(self.timed_message.enabled)
-        form_layout.addRow("", self.enabled_checkbox)
-
-        # 按钮
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-    def set_protocol_info(self, protocol_id, protocol_data):
+    def to_dict(self):
         """
-        设置协议相关信息
+        转换为字典，用于保存配置
+
+        Returns:
+            dict: 配置字典
+        """
+        return {
+            "name": self.name,
+            "message": " ".join([f"{b:02X}" for b in self.message]),
+            "interval": self.interval,
+            "enabled": self.enabled,
+            "protocol_id": self.protocol_id
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """
+        从字典创建报文对象
 
         Args:
-            protocol_id (str): 协议ID
-            protocol_data (dict): 协议数据
+            data (dict): 配置字典
+
+        Returns:
+            TimedMessage: 报文对象
         """
-        # 设置报文名称
-        protocol_name = protocol_data.get('protocol_name', '')
-        message_id = protocol_data.get('message_id', '')
-        self.name_edit.setText(f"{protocol_id} - {message_id} - {protocol_name}")
-
-        # 保存协议ID
-        self.timed_message.protocol_id = protocol_id
-
-    def accept(self):
-        """确认按钮点击事件"""
-        # 验证输入
-        name = self.name_edit.text().strip()
-        if not name:
-            QMessageBox.warning(self, "错误", "报文名称不能为空!")
-            return
-
-        # 获取报文内容
-        message_text = self.message_edit.toPlainText().strip()
         try:
-            # 移除空格和换行
-            message_text = message_text.replace(" ", "").replace("\n", "").replace("\r", "")
-            message = bytes.fromhex(message_text)
-            if not message:
-                QMessageBox.warning(self, "错误", "报文内容不能为空!")
-                return
+            # 将十六进制字符串转换为字节
+            message_str = data.get("message", "")
+            message_bytes = bytes.fromhex(message_str.replace(" ", ""))
+
+            return cls(
+                name=data.get("name", ""),
+                message=message_bytes,
+                interval=int(data.get("interval", 1000)),
+                enabled=bool(data.get("enabled", False)),
+                protocol_id=data.get("protocol_id", "")
+            )
         except Exception as e:
-            QMessageBox.warning(self, "错误", f"无效的十六进制报文: {str(e)}")
-            return
+            print(f"加载定时报文错误: {str(e)}")
+            return cls()
 
-        # 更新报文对象
-        self.timed_message.name = name
-        self.timed_message.message = message
-        self.timed_message.interval = self.interval_spinbox.value()
-        self.timed_message.enabled = self.enabled_checkbox.isChecked()
 
-        super().accept()
-
+# 在message_dialog.py中，修改MessageDetailDialog类，添加定时发送功能
 
 class MessageDetailDialog(QDialog):
     """报文详情对话框"""
@@ -192,6 +158,24 @@ class MessageDetailDialog(QDialog):
         export_btn.clicked.connect(self.export_details)
         button_layout.addWidget(export_btn)
 
+        # 添加定时发送区域和按钮
+        timed_send_layout = QHBoxLayout()
+        layout.addLayout(timed_send_layout)
+
+        timed_send_layout.addWidget(QLabel("定时发送间隔(ms):"))
+
+        # 间隔输入框
+        self.interval_spinbox = QSpinBox()
+        self.interval_spinbox.setRange(10, 60000)  # 10ms到60s
+        self.interval_spinbox.setValue(1000)  # 默认1000ms
+        self.interval_spinbox.setSuffix(" ms")
+        timed_send_layout.addWidget(self.interval_spinbox)
+
+        # 定时发送按钮
+        self.timed_send_btn = QPushButton("添加到定时任务")
+        self.timed_send_btn.clicked.connect(self.add_timed_task)
+        timed_send_layout.addWidget(self.timed_send_btn)
+
         # 关闭按钮
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
@@ -255,6 +239,84 @@ class MessageDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导出失败: {str(e)}")
 
+    def add_timed_task(self):
+        """添加定时发送任务"""
+        # 获取原始报文内容
+        raw_message = self.message_data.get('raw_message', '')
+        if not raw_message:
+            QMessageBox.warning(self, "错误", "无有效报文可添加")
+            return
+
+        # 移除空格
+        raw_message = raw_message.replace(" ", "")
+
+        try:
+            # 将十六进制字符串转换为字节
+            message_bytes = bytes.fromhex(raw_message)
+
+            # 获取协议信息
+            protocol_id = self.message_data.get('protocol_id', '')
+            message_id = self.message_data.get('message_id', '')
+            protocol_name = self.message_data.get('protocol_name', '')
+
+            # 创建任务名称
+            task_name = f"{protocol_id}-{message_id}"
+            if protocol_name:
+                task_name += f"-{protocol_name}"
+
+            # 获取间隔时间
+            interval = self.interval_spinbox.value()
+
+            # 获取主窗口
+            main_window = self.window()
+            while main_window and not hasattr(main_window, 'timed_messages_manager'):
+                main_window = main_window.parent()
+
+            if not main_window or not hasattr(main_window, 'timed_messages_manager'):
+                QMessageBox.warning(self, "错误", "找不到定时任务管理器")
+                return
+
+            # 添加定时任务
+            from message_transceiver import TimedMessage
+
+            # 查找是否已存在相同协议ID的任务
+            timed_message = None
+            for msg in main_window.timed_messages_manager.timed_messages:
+                if msg.protocol_id == protocol_id:
+                    # 更新已存在的任务
+                    msg.name = task_name
+                    msg.message = message_bytes
+                    msg.interval = interval
+                    msg.enabled = True
+                    timed_message = msg
+                    QMessageBox.information(self, "成功", f"已更新协议 {protocol_id} 的定时任务")
+                    break
+
+            # 如果不存在则创建新任务
+            if not timed_message:
+                timed_message = TimedMessage(
+                    name=task_name,
+                    message=message_bytes,
+                    interval=interval,
+                    enabled=True,
+                    protocol_id=protocol_id
+                )
+                main_window.timed_messages_manager.timed_messages.append(timed_message)
+                QMessageBox.information(self, "成功", f"已创建协议 {protocol_id} 的定时任务")
+
+            # 更新表格显示
+            main_window.timed_messages_manager.update_table()
+
+            # 如果串口已打开，启动定时器
+            if main_window.timed_messages_manager.timer and not main_window.timed_messages_manager.timer.isActive():
+                if main_window.serial and main_window.serial.isOpen():
+                    main_window.timed_messages_manager.timer.start(10)
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"添加定时任务失败: {str(e)}")
+
+
+# 在message_dialog.py中，修改MessagePreviewDialog类，添加定时发送按钮
 
 class MessagePreviewDialog(QDialog):
     """报文预览对话框"""
@@ -262,7 +324,7 @@ class MessagePreviewDialog(QDialog):
     def __init__(self, message, protocol_id, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{protocol_id}报文预览")
-        self.resize(500, 300)
+        self.resize(500, 350)  # 增加一点高度来容纳新控件
         self.message = message
         self.protocol_id = protocol_id
         self.init_ui()
@@ -288,6 +350,24 @@ class MessagePreviewDialog(QDialog):
         message_text.setReadOnly(True)
         layout.addWidget(message_text)
 
+        # 添加定时发送区域
+        timed_layout = QHBoxLayout()
+        layout.addLayout(timed_layout)
+
+        timed_layout.addWidget(QLabel("定时发送间隔(ms):"))
+
+        # 间隔输入框
+        self.interval_spinbox = QSpinBox()
+        self.interval_spinbox.setRange(10, 60000)  # 10ms到60s
+        self.interval_spinbox.setValue(1000)  # 默认1000ms
+        self.interval_spinbox.setSuffix(" ms")
+        timed_layout.addWidget(self.interval_spinbox)
+
+        # 自动启用复选框
+        self.auto_enable = QCheckBox("自动启用")
+        self.auto_enable.setChecked(True)  # 默认启用
+        timed_layout.addWidget(self.auto_enable)
+
         # 按钮区域
         button_layout = QHBoxLayout()
         layout.addLayout(button_layout)
@@ -296,6 +376,11 @@ class MessagePreviewDialog(QDialog):
         copy_btn = QPushButton("复制报文")
         copy_btn.clicked.connect(self.copy_message)
         button_layout.addWidget(copy_btn)
+
+        # 添加为定时任务按钮
+        timed_btn = QPushButton("添加为定时任务")
+        timed_btn.clicked.connect(self.add_timed_task)
+        button_layout.addWidget(timed_btn)
 
         # 发送按钮
         send_btn = QPushButton("发送报文")
@@ -314,6 +399,94 @@ class MessagePreviewDialog(QDialog):
             hex_text = ''.join([f"{b:02X}" for b in self.message])
             QApplication.clipboard().setText(hex_text)
             QMessageBox.information(self, "提示", "报文已复制到剪贴板")
+
+    def add_timed_task(self):
+        """添加为定时任务"""
+        try:
+            # 获取主窗口
+            main_window = self.window()
+            while main_window and not hasattr(main_window, 'timed_messages_manager'):
+                main_window = main_window.parent()
+
+            if not main_window or not hasattr(main_window, 'timed_messages_manager'):
+                QMessageBox.warning(self, "错误", "找不到定时任务管理器")
+                return
+
+            # 获取协议信息
+            protocol_id = self.protocol_id
+            # 尝试获取更多信息
+            protocol_data = None
+            if hasattr(main_window, 'config_parser') and main_window.config_parser:
+                protocol_data = main_window.config_parser.get_protocol(protocol_id)
+
+            # 创建任务名称
+            message_id = ""
+            protocol_name = ""
+            if protocol_data:
+                message_id = protocol_data.get('message_id', '')
+                protocol_name = protocol_data.get('protocol_name', '')
+
+            task_name = f"{protocol_id}"
+            if message_id:
+                task_name += f"-{message_id}"
+            if protocol_name:
+                task_name += f"-{protocol_name}"
+
+            # 获取定时间隔和启用状态
+            interval = self.interval_spinbox.value()
+            enabled = self.auto_enable.isChecked()
+
+            # 检查是否已有相同协议ID的任务
+            from message_transceiver import TimedMessage
+
+            # 查找是否已存在相同协议ID的任务
+            found = False
+            for msg in main_window.timed_messages_manager.timed_messages:
+                if msg.protocol_id == protocol_id:
+                    # 更新已存在的任务
+                    msg.name = task_name
+                    msg.message = self.message
+                    msg.interval = interval
+                    msg.enabled = enabled
+                    found = True
+
+                    # 添加日志
+                    if hasattr(main_window, 'add_log_message'):
+                        main_window.add_log_message(f"已更新协议 {protocol_id} 的定时任务", "system")
+                    else:
+                        QMessageBox.information(self, "成功", f"已更新协议 {protocol_id} 的定时任务")
+                    break
+
+            # 如果不存在则创建新任务
+            if not found:
+                timed_message = TimedMessage(
+                    name=task_name,
+                    message=self.message,
+                    interval=interval,
+                    enabled=enabled,
+                    protocol_id=protocol_id
+                )
+                main_window.timed_messages_manager.timed_messages.append(timed_message)
+
+                # 添加日志
+                if hasattr(main_window, 'add_log_message'):
+                    main_window.add_log_message(f"已创建协议 {protocol_id} 的定时任务", "system")
+                else:
+                    QMessageBox.information(self, "成功", f"已创建协议 {protocol_id} 的定时任务")
+
+            # 更新表格显示
+            main_window.timed_messages_manager.update_table()
+
+            # 如果串口已打开并且启用了任务，启动定时器
+            if enabled and main_window.timed_messages_manager.timer and not main_window.timed_messages_manager.timer.isActive():
+                if hasattr(main_window, 'serial') and main_window.serial and main_window.serial.isOpen():
+                    main_window.timed_messages_manager.timer.start(10)
+
+            # 关闭对话框
+            self.accept()
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"添加定时任务失败: {str(e)}")
 
 
 class ProtocolSelectDialog(QDialog):
