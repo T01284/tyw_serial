@@ -10,7 +10,7 @@
 import struct
 from datetime import datetime
 from PyQt5.QtCore import QObject, pyqtSignal
-
+from log_manager import LogManager, log_debug, log_info, log_error, log_exception
 
 class ProtocolParser(QObject):
     """协议解析器，解析接收到的报文数据"""
@@ -43,23 +43,23 @@ class ProtocolParser(QObject):
         """
         try:
             # 打印接收到的字段值
-            print("\n========== 生成报文调试信息 ==========")
-            print(f"协议ID: {protocol_id}")
-            print("接收到的字段值:")
+            log_debug("\n========== 生成报文调试信息 ==========")
+            log_debug(f"协议ID: {protocol_id}")
+            log_debug("接收到的字段值:")
             for field_id, value in field_values.items():
-                print(f"  {field_id} = {value}")
+                log_debug(f"  {field_id} = {value}")
 
             # 获取协议数据
             protocol_data = self.protocols.get(protocol_id)
             if not protocol_data:
-                print("错误: 未找到协议数据")
+                log_debug("错误: 未找到协议数据")
                 return None
 
             # 打印字段ID映射，便于调试
-            print("字段ID映射:")
-            for field in protocol_data.get('fields', []):
-                field_id = field.get('id', '')
-                print(f"  {protocol_id}_{field_id} -> {field_id}")
+            # log_debug("字段ID映射:")
+            # for field in protocol_data.get('fields', []):
+            #     field_id = field.get('id', '')
+            #     log_debug(f"  {protocol_id}_{field_id} -> {field_id}")
 
             # 获取报文格式信息
             message_format = protocol_data.get('message_format', {})
@@ -69,7 +69,7 @@ class ProtocolParser(QObject):
             # 新增: 检查是否使用2字节数据长度
             length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
 
-            print(f"报文格式: ID={message_id}, 长度字节={length_bytes}")
+            log_debug(f"报文格式: ID={message_id}, 长度字节={length_bytes}")
 
             # 转换为字节格式
             start_bytes_value = bytes([int(b, 16) for b in start_bytes])
@@ -89,13 +89,13 @@ class ProtocolParser(QObject):
                 elif isinstance(byte_position, int):
                     max_byte_pos = max(max_byte_pos, byte_position + 1)
 
-            print(f"数据缓冲区大小: {max_byte_pos} 字节")
+            log_debug(f"数据缓冲区大小: {max_byte_pos} 字节")
 
             # 初始化所有字节为0x00 (默认值为0)
             data_bytes = bytearray([0x00] * max_byte_pos)
 
             # 填充字段值
-            print("\n字段处理详情:")
+            log_debug("\n字段处理详情:")
             for field in fields:
                 field_id = field.get('id', '')
                 field_name = field.get('name', '')
@@ -103,17 +103,17 @@ class ProtocolParser(QObject):
 
                 # 特别检查特定字段
                 if field_id == "B1[0:1]" or "整车ACC状态" in field_name:
-                    print(f"处理特殊字段 {field_id} ({field_name}), 值 = {field_value}")
+                    log_debug(f"处理特殊字段 {field_id} ({field_name}), 值 = {field_value}")
 
                 # 新的字段ID格式
                 new_field_id = f"{protocol_id}_{field_id}"
 
-                print(f"\n处理字段: {field_id} ({field_name})")
-                print(f"  新ID: {new_field_id}")
-                print(f"  输入值: {field_value}")
+                log_debug(f"\n处理字段: {field_id} ({field_name})")
+                log_debug(f"  新ID: {new_field_id}")
+                log_debug(f"  输入值: {field_value}")
 
                 if field_value is None:
-                    print(f"  跳过: 未提供值")
+                    log_debug(f"  跳过: 未提供值")
                     continue
 
                 field_type = field.get('type', 'Unsigned')
@@ -123,8 +123,8 @@ class ProtocolParser(QObject):
                 byte_position = field.get('byte_position', [])
                 bit_position = field.get('bit_position', None)
 
-                print(f"  类型: {field_type}, 长度: {field_length}, 精度: {precision}, 偏移: {offset}")
-                print(f"  字节位置: {byte_position}, 位位置: {bit_position}")
+                log_debug(f"  类型: {field_type}, 长度: {field_length}, 精度: {precision}, 偏移: {offset}")
+                log_debug(f"  字节位置: {byte_position}, 位位置: {bit_position}")
 
                 try:
                     # 处理不同的字段类型
@@ -148,11 +148,11 @@ class ProtocolParser(QObject):
                                 # 转换为整数
                                 numeric_value = int(round(numeric_value))
 
-                            print(f"  转换后的数值: {numeric_value} (0x{numeric_value:X})")
+                            log_debug(f"  转换后的数值: {numeric_value} (0x{numeric_value:X})")
 
                         except ValueError as e:
                             # 如果无法转换为数值，跳过
-                            print(f"  错误: 无法将 '{field_value}' 转换为数值: {str(e)}")
+                            log_debug(f"  错误: 无法将 '{field_value}' 转换为数值: {str(e)}")
                             continue
 
                         # 根据字段长度转换为字节
@@ -165,34 +165,34 @@ class ProtocolParser(QObject):
                         else:
                             value_bytes = numeric_value.to_bytes(field_length, byteorder='little')
 
-                        print(f"  字节值: {' '.join([f'{b:02X}' for b in value_bytes])}")
+                        log_debug(f"  字节值: {' '.join([f'{b:02X}' for b in value_bytes])}")
 
                         # 填充到数据字节
                         if isinstance(byte_position, list):
                             # 多字节字段
-                            print(f"  填充多字节字段:")
+                            log_debug(f"  填充多字节字段:")
                             for i, pos in enumerate(byte_position):
                                 if i < len(value_bytes) and pos < len(data_bytes):
-                                    print(f"    位置 {pos}: {data_bytes[pos]:02X} -> {value_bytes[i]:02X}")
+                                    log_debug(f"    位置 {pos}: {data_bytes[pos]:02X} -> {value_bytes[i]:02X}")
                                     data_bytes[pos] = value_bytes[i]
 
                         elif isinstance(byte_position, int):
                             # 单字节字段，但可能只使用部分位
                             if byte_position >= len(data_bytes):
-                                print(f"  错误: 字节位置 {byte_position} 超出缓冲区大小 {len(data_bytes)}")
+                                log_debug(f"  错误: 字节位置 {byte_position} 超出缓冲区大小 {len(data_bytes)}")
                                 continue
 
                             if bit_position:
                                 # 有位定义，只修改指定位
-                                print(f"  有位定义, 修改指定位:")
+                                log_debug(f"  有位定义, 修改指定位:")
                                 if isinstance(bit_position, list):
                                     # 多位
                                     mask = 0
                                     for bit in bit_position:
                                         mask |= (1 << bit)
 
-                                    print(f"    位掩码: 0x{mask:02X}")
-                                    print(f"    原始值: 0x{data_bytes[byte_position]:02X}")
+                                    log_debug(f"    位掩码: 0x{mask:02X}")
+                                    log_debug(f"    原始值: 0x{data_bytes[byte_position]:02X}")
 
                                     # 清除原有位
                                     data_bytes[byte_position] &= ~mask
@@ -201,12 +201,12 @@ class ProtocolParser(QObject):
                                     min_bit = min(bit_position)
                                     data_bytes[byte_position] |= ((numeric_value << min_bit) & mask)
 
-                                    print(f"    新值: 0x{data_bytes[byte_position]:02X}")
+                                    log_debug(f"    新值: 0x{data_bytes[byte_position]:02X}")
 
                                 elif isinstance(bit_position, int):
                                     # 单位
-                                    print(f"    位置: {bit_position}")
-                                    print(f"    原始值: 0x{data_bytes[byte_position]:02X}")
+                                    log_debug(f"    位置: {bit_position}")
+                                    log_debug(f"    原始值: 0x{data_bytes[byte_position]:02X}")
 
                                     # 清除原有位
                                     data_bytes[byte_position] &= ~(1 << bit_position)
@@ -215,26 +215,26 @@ class ProtocolParser(QObject):
                                     if numeric_value:
                                         data_bytes[byte_position] |= (1 << bit_position)
 
-                                    print(f"    新值: 0x{data_bytes[byte_position]:02X}")
+                                    log_debug(f"    新值: 0x{data_bytes[byte_position]:02X}")
                             else:
                                 # 没有位定义，使用整个字节
-                                print(
+                                log_debug(
                                     f"  填充单字节: 位置 {byte_position}: {data_bytes[byte_position]:02X} -> {value_bytes[0]:02X}")
                                 data_bytes[byte_position] = value_bytes[0]
 
                     else:
                         # 其他类型，保存原始数据
-                        print(f"  使用原始值: {field_value}")
+                        log_debug(f"  使用原始值: {field_value}")
                         # 处理其他类型的逻辑...
 
                 except Exception as e:
-                    print(f"  生成字段错误: {str(e)}")
+                    log_debug(f"  生成字段错误: {str(e)}")
                     continue
 
             # 打印最终数据
-            print("\n最终数据字节:")
+            log_debug("\n最终数据字节:")
             hex_data = ' '.join([f'{b:02X}' for b in data_bytes])
-            print(f"  {hex_data}")
+            log_debug(f"  {hex_data}")
 
             # 构建完整报文
             message_bytes = bytearray()
@@ -270,18 +270,18 @@ class ProtocolParser(QObject):
             message_bytes.extend(end_bytes_value)
 
             # 打印完整报文
-            print("\n完整报文:")
+            log_debug("\n完整报文:")
             hex_message = ' '.join([f'{b:02X}' for b in message_bytes])
-            print(f"  {hex_message}")
-            print("====================================\n")
+            log_debug(f"  {hex_message}")
+            log_debug("====================================\n")
 
             return bytes(message_bytes)
 
         except Exception as e:
-            print(f"生成报文错误: {str(e)}")
+            log_debug(f"生成报文错误: {str(e)}")
             import traceback
-            traceback.print_exc()  # 打印完整的异常堆栈跟踪，以便更好地调试
-            print("====================================\n")
+            traceback.log_debug_exc()  # 打印完整的异常堆栈跟踪，以便更好地调试
+            log_debug("====================================\n")
             return None
 
     def parse_message(self, message_bytes):
@@ -322,7 +322,7 @@ class ProtocolParser(QObject):
             return None, None
 
         except Exception as e:
-            print(f"解析报文错误: {str(e)}")
+            log_debug(f"解析报文错误: {str(e)}")
             return None, None
 
     def parse_protocol_message(self, protocol_data, message_bytes):
@@ -404,7 +404,7 @@ class ProtocolParser(QObject):
             return None
 
         except Exception as e:
-            print(f"解析协议报文错误: {str(e)}")
+            log_debug(f"解析协议报文错误: {str(e)}")
             return None
 
     def parse_fields(self, protocol_data, data_bytes, raw_message=None):
@@ -595,7 +595,7 @@ class ProtocolParser(QObject):
                     }
 
             except Exception as e:
-                print(f"解析字段 {field_name}({field_id}) 错误: {str(e)}")
+                log_debug(f"解析字段 {field_name}({field_id}) 错误: {str(e)}")
                 continue
 
         return result
@@ -608,7 +608,7 @@ class ProtocolParser(QObject):
             protocol_id (str): 协议ID
         """
         try:
-            print(f"当前需要处理的协议: {protocol_id}")
+            log_debug(f"当前需要处理的协议: {protocol_id}")
 
             # 获取协议数据
             protocol_data = self.config_parser.get_protocol(protocol_id)
@@ -617,19 +617,19 @@ class ProtocolParser(QObject):
                 return
 
             # 输出当前协议的字段列表
-            print("当前协议可能的字段ID列表:")
+            log_debug("当前协议可能的字段ID列表:")
             fields = protocol_data.get('fields', [])
             for field in fields:
                 field_id = field.get('id', '')
                 field_name = field.get('name', '')
                 new_field_id = f"{protocol_id}_{field_id}"
-                print(f"  {new_field_id} ({field_name})")
+                log_debug(f"  {new_field_id} ({field_name})")
 
             # 只获取当前协议的字段值，使用专门的错误处理
             try:
                 protocol_field_values_with_prefix = self.protocol_ui_generator.get_field_values(protocol_id)
             except Exception as e:
-                print(f"获取字段值时出错: {str(e)}")
+                log_debug(f"获取字段值时出错: {str(e)}")
                 self.add_log_message(f"获取字段值时出错: {str(e)}", "error")
                 return
 
@@ -642,15 +642,15 @@ class ProtocolParser(QObject):
                 if field_id.startswith(f"{protocol_id}_"):
                     original_id = field_id[prefix_len:]
                     protocol_field_values[original_id] = value
-                    print(f"字段映射: {field_id} -> {original_id} = {value}")
+                    log_debug(f"字段映射: {field_id} -> {original_id} = {value}")
 
             # 打印最终要使用的字段值
-            print("\n最终使用的字段值:")
+            log_debug("\n最终使用的字段值:")
             if protocol_field_values:
                 for field_id, value in protocol_field_values.items():
-                    print(f"  {field_id} = {value}")
+                    log_debug(f"  {field_id} = {value}")
             else:
-                print("  无有效字段值")
+                log_debug("  无有效字段值")
 
             # 使用过滤后的字段值生成报文
             try:
@@ -667,11 +667,11 @@ class ProtocolParser(QObject):
                 else:
                     QMessageBox.warning(self, "错误", "生成报文失败，请检查字段值!")
             except Exception as e:
-                print(f"生成或发送报文时出错: {str(e)}")
+                log_debug(f"生成或发送报文时出错: {str(e)}")
                 self.add_log_message(f"生成报文时出错: {str(e)}", "error")
 
         except Exception as e:
-            print(f"生成报文过程中出现未处理的错误: {str(e)}")
+            log_debug(f"生成报文过程中出现未处理的错误: {str(e)}")
             self.add_log_message(f"生成报文错误: {str(e)}", "error")
 
 

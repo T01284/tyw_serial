@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QDoubleSpinBox, QFrame, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal, QRegExp
 from PyQt5.QtGui import QRegExpValidator, QIntValidator, QDoubleValidator, QColor, QBrush, QFont, QValidator
-
+from log_manager import LogManager, log_debug, log_info, log_error, log_exception
 
 class FieldInputWidget(QWidget):
     """字段输入控件，统一使用QLineEdit"""
@@ -37,7 +37,7 @@ class FieldInputWidget(QWidget):
         self.current_value = None  # 添加一个成员变量来存储当前值
 
         # 输出调试信息
-        print(f"创建字段控件: ID={self.field_id}, 原始ID={self.original_id}, 名称={self.field_name}")
+        #log_debug(f"创建字段控件: ID={self.field_id}, 原始ID={self.original_id}, 名称={self.field_name}")
 
         # 使用网格布局代替垂直布局，便于控制对齐
         self.layout = QGridLayout(self)
@@ -146,7 +146,7 @@ class FieldInputWidget(QWidget):
 
         # 针对特定字段添加额外调试信息
         if "_B1[0:1]" in self.field_id or "整车ACC状态" in self.field_name:
-            print(f"字段 {self.field_id} 值已变更为: {value}")
+            log_debug(f"字段 {self.field_id} 值已变更为: {value}")
 
     def editing_finished(self):
         """编辑完成处理函数"""
@@ -156,7 +156,7 @@ class FieldInputWidget(QWidget):
 
         # 针对特定字段添加额外调试信息
         if "_B1[0:1]" in self.field_id or "整车ACC状态" in self.field_name:
-            print(f"字段 {self.field_id} 编辑完成，最终值为: {value}")
+            log_debug(f"字段 {self.field_id} 编辑完成，最终值为: {value}")
 
     def get_value(self):
         """获取当前值"""
@@ -179,7 +179,7 @@ class FieldInputWidget(QWidget):
 
             # 针对特定字段添加额外调试信息
             if "_B1[0:1]" in self.field_id or "整车ACC状态" in self.field_name:
-                print(f"设置字段 {self.field_id} 值为: {value}")
+                log_debug(f"设置字段 {self.field_id} 值为: {value}")
 
 
 class ProtocolUIGenerator:
@@ -267,7 +267,7 @@ class ProtocolUIGenerator:
             new_field_id = f"{protocol_id}_{original_field_id}"
 
             # 输出字段ID映射，用于调试
-            print(f"字段ID映射: {original_field_id} -> {new_field_id}")
+            log_debug(f"字段ID映射: {original_field_id} -> {new_field_id}")
 
             # 更新字段信息中的ID（复制一份以避免修改原始数据）
             field_info = field.copy()
@@ -331,27 +331,27 @@ class ProtocolUIGenerator:
             dict: 字段值字典 {field_id: value}，根据protocol_id可能只返回部分字段
         """
         values = {}
-        print(f"\n============== 控件值调试信息 {'(协议:' + protocol_id + ')' if protocol_id else ''} ==============")
+        log_debug(f"\n============== 控件值调试信息 {'(协议:' + protocol_id + ')' if protocol_id else ''} ==============")
 
         # 首先打印所有字段ID，看看哪些字段是可用的
         if protocol_id:
             # 使用协议特定的字段字典
             if protocol_id in self.protocol_widgets:
                 widgets_dict = self.protocol_widgets[protocol_id]
-                print(f"使用协议 {protocol_id} 的专用控件字典，包含 {len(widgets_dict)} 个控件")
+                log_debug(f"使用协议 {protocol_id} 的专用控件字典，包含 {len(widgets_dict)} 个控件")
             else:
                 # 如果没有该协议的专用字典，从全局字典中筛选
                 widgets_dict = {k: v for k, v in self.field_widgets.items() if k.startswith(f"{protocol_id}_")}
-                print(f"从全局字典中筛选协议 {protocol_id} 的控件，找到 {len(widgets_dict)} 个")
+                log_debug(f"从全局字典中筛选协议 {protocol_id} 的控件，找到 {len(widgets_dict)} 个")
         else:
             # 使用全局字段字典
             widgets_dict = self.field_widgets
-            print(f"使用全局控件字典，包含 {len(widgets_dict)} 个控件")
+            log_debug(f"使用全局控件字典，包含 {len(widgets_dict)} 个控件")
 
         # 打印所有可用控件的ID
-        print("可用控件ID列表:")
+        log_debug("可用控件ID列表:")
         for field_id in widgets_dict.keys():
-            print(f"  {field_id}")
+            log_debug(f"  {field_id}")
 
         # 处理每个控件并获取值
         try:
@@ -361,32 +361,32 @@ class ProtocolUIGenerator:
 
                     # 特别检查特定字段
                     if field_id.endswith("_B1[0:1]") or "整车ACC状态" in getattr(widget, 'field_name', ''):
-                        print(f"检查字段 {field_id}: 值 = {value}, 类型 = {type(value)}")
+                        log_debug(f"检查字段 {field_id}: 值 = {value}, 类型 = {type(value)}")
                         # 尝试从文本框直接获取
                         if hasattr(widget, 'input_widget'):
                             text_value = widget.input_widget.text()
                             if text_value:
                                 value = text_value
-                                print(f"  从文本框直接获取到值: {value}")
+                                log_debug(f"  从文本框直接获取到值: {value}")
                             # 尝试从current_value获取
                             elif hasattr(widget, 'current_value') and widget.current_value:
                                 value = widget.current_value
-                                print(f"  从current_value获取到值: {value}")
+                                log_debug(f"  从current_value获取到值: {value}")
 
                     # 直接输出值的内容和类型，以便调试
-                    print(f"控件 {field_id}: 值 = {value}, 类型 = {type(value)}")
+                    log_debug(f"控件 {field_id}: 值 = {value}, 类型 = {type(value)}")
 
                     # 存储所有非None值
                     if value is not None:
                         values[field_id] = value
-                        print(f"  - 已添加到字段值字典")
+                        log_debug(f"  - 已添加到字段值字典")
                     else:
-                        print(f"  - 值为None，未添加到字段值字典")
+                        log_debug(f"  - 值为None，未添加到字段值字典")
                 except Exception as e:
-                    print(f"获取控件 {field_id} 的值时出错: {str(e)}")
+                    log_debug(f"获取控件 {field_id} 的值时出错: {str(e)}")
                     continue
         except Exception as e:
-            print(f"遍历控件时出错: {str(e)}")
+            log_debug(f"遍历控件时出错: {str(e)}")
 
         # 特别处理D3h_B1[0:1]字段（整车ACC状态）
         if protocol_id == "D3h":
@@ -395,17 +395,17 @@ class ProtocolUIGenerator:
                 widget = widgets_dict[special_field_id]
                 if hasattr(widget, 'current_value') and widget.current_value:
                     values[special_field_id] = widget.current_value
-                    print(f"特别处理: 从current_value添加字段 {special_field_id} 的值 = {widget.current_value}")
+                    log_debug(f"特别处理: 从current_value添加字段 {special_field_id} 的值 = {widget.current_value}")
                 elif hasattr(widget, 'input_widget'):
                     text_value = widget.input_widget.text()
                     if text_value:
                         values[special_field_id] = text_value
-                        print(f"特别处理: 从文本框添加字段 {special_field_id} 的值 = {text_value}")
+                        log_debug(f"特别处理: 从文本框添加字段 {special_field_id} 的值 = {text_value}")
 
         count = sum(1 for field_id in values if protocol_id and field_id.startswith(f"{protocol_id}_"))
-        print(
+        log_debug(
             f"共获取到 {len(values)} 个字段值，其中 {count} 个属于协议 {protocol_id}" if protocol_id else f"共获取到 {len(values)} 个字段值")
-        print("==========================================\n")
+        log_debug("==========================================\n")
         return values
 
     def set_field_values(self, values):
