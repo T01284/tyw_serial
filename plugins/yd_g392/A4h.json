@@ -1,0 +1,34 @@
+{
+  "protocol_name": "新架构RS485线总线ICM节点通信协议",
+  "protocol_version": "V2.01",
+  "message_id": "A4h",
+  "message_type": "静态请求报文",
+  "message_source": "ALM",
+  "fields": [
+    {
+      "name": "预留",
+      "id": "B0",
+      "byte_position": 0,
+      "bit_position": null,
+      "type": "Unsigned",
+      "length": 1,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 255,
+      "min_hex": "0x00",
+      "max_hex": "0xFF",
+      "default_hex": "0xFF",
+      "invalid_hex": "0xFF",
+      "description": "静态请求报文预留字段"
+    }
+  ],
+  "message_format": {
+    "start_bytes": ["0x59", "0x44"],
+    "message_id": "0xA4",
+    "data_length": "0x01",
+    "end_bytes": ["0x4B", "0x4A"],
+    "checksum": "CRC16-modbus"
+  }
+}
