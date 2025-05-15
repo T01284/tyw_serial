@@ -55,12 +55,6 @@ class ProtocolParser(QObject):
                 log_debug("错误: 未找到协议数据")
                 return None
 
-            # 打印字段ID映射，便于调试
-            # log_debug("字段ID映射:")
-            # for field in protocol_data.get('fields', []):
-            #     field_id = field.get('id', '')
-            #     log_debug(f"  {protocol_id}_{field_id} -> {field_id}")
-
             # 获取报文格式信息
             message_format = protocol_data.get('message_format', {})
             start_bytes = message_format.get('start_bytes', ["0x59", "0x44"])
@@ -69,7 +63,18 @@ class ProtocolParser(QObject):
             # 新增: 检查是否使用2字节数据长度
             length_bytes = message_format.get('length_bytes', 1)  # 默认为1字节
 
-            log_debug(f"报文格式: ID={message_id}, 长度字节={length_bytes}")
+            # 获取规定的数据长度（如果有）
+            fixed_data_length = None
+            if "data_length" in message_format:
+                fixed_data_length = int(message_format.get('data_length', "0"), 16)
+                log_debug(f"协议定义的固定数据长度: 0x{fixed_data_length:X} ({fixed_data_length}字节)")
+
+            # 特殊处理特定报文
+            if message_id == "0xD1":  # D1h报文
+                fixed_data_length = 0x8B  # 139字节
+                log_debug(f"D1h报文: 将使用固定数据长度 0x8B (139字节)")
+
+            log_debug(f"报文格式: ID={message_id}, 长度字节={length_bytes}, 固定数据长度={fixed_data_length}")
 
             # 转换为字节格式
             start_bytes_value = bytes([int(b, 16) for b in start_bytes])
@@ -88,6 +93,10 @@ class ProtocolParser(QObject):
                     max_byte_pos = max(max_byte_pos, max(byte_position) + 1)
                 elif isinstance(byte_position, int):
                     max_byte_pos = max(max_byte_pos, byte_position + 1)
+
+            # 如果有固定长度要求，确保长度不小于max_byte_pos
+            if fixed_data_length is not None:
+                max_byte_pos = max(max_byte_pos, fixed_data_length)
 
             log_debug(f"数据缓冲区大小: {max_byte_pos} 字节")
 
@@ -231,48 +240,106 @@ class ProtocolParser(QObject):
                     log_debug(f"  生成字段错误: {str(e)}")
                     continue
 
+            # 特殊处理D1h报文
+            if message_id_value == 0xD1:
+                log_debug("\n================ 特殊处理 D1h 报文 ================")
+                # 确保数据部分长度为139字节
+                required_data_length = 0x8B  # 139字节
+                actual_data_length = len(data_bytes)
+
+                if actual_data_length < required_data_length:
+                    # 如果不足139字节，补足到139字节
+                    padding_length = required_data_length - actual_data_length
+                    log_debug(
+                        f"数据长度不足 ({actual_data_length} < {required_data_length})，添加 {padding_length} 字节的填充")
+                    data_bytes.extend([0x00] * padding_length)
+                elif actual_data_length > required_data_length:
+                    # 如果超过139字节，截断到139字节
+                    log_debug(
+                        f"数据长度超出 ({actual_data_length} > {required_data_length})，截断到 {required_data_length} 字节")
+                    data_bytes = data_bytes[:required_data_length]
+
+                log_debug(f"调整后的数据长度: {len(data_bytes)} 字节")
+                log_debug("====================================================\n")
+
             # 打印最终数据
             log_debug("\n最终数据字节:")
             hex_data = ' '.join([f'{b:02X}' for b in data_bytes])
             log_debug(f"  {hex_data}")
+            log_debug(f"  数据长度: {len(data_bytes)} 字节")
 
             # 构建完整报文
             message_bytes = bytearray()
 
             # 添加报文头
             message_bytes.extend(start_bytes_value)
+            log_debug(f"添加报文头: {start_bytes_value.hex(' ').upper()}")
 
             # 添加报文ID
             message_bytes.append(message_id_value)
+            log_debug(f"添加报文ID: {message_id_value:02X}")
+
+            # 处理数据长度字段
+            # 针对特定报文强制使用协议定义的长度
+            override_length = None
+            if message_id_value == 0xD1:  # D1h报文
+                override_length = 0x8B  # 139字节
+                log_debug(f"D1h报文: 强制使用数据长度 0x8B (139字节)")
+            elif fixed_data_length is not None:
+                override_length = fixed_data_length
+                log_debug(f"使用协议定义的固定数据长度: 0x{fixed_data_length:X} ({fixed_data_length}字节)")
 
             # 添加数据长度
             if length_bytes == 1:
                 # 单字节长度
-                message_bytes.append(len(data_bytes))
+                length_value = override_length if override_length is not None else len(data_bytes)
+                message_bytes.append(length_value)
+                log_debug(f"添加单字节长度字段: 0x{length_value:02X} ({length_value}字节)")
             else:
                 # 两字节长度(小端)
-                length_value = len(data_bytes)
+                length_value = override_length if override_length is not None else len(data_bytes)
                 message_bytes.append(length_value & 0xFF)  # 低字节
                 message_bytes.append((length_value >> 8) & 0xFF)  # 高字节
+                log_debug(
+                    f"添加双字节长度字段: 低字节=0x{length_value & 0xFF:02X}, 高字节=0x{(length_value >> 8) & 0xFF:02X}, 总长度={length_value}字节")
 
             # 添加数据
             message_bytes.extend(data_bytes)
+            log_debug(f"添加数据部分: {len(data_bytes)} 字节")
 
             # 计算CRC校验
-            if length_bytes == 1:
-                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
-            else:
-                crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
-
-            message_bytes.extend(crc.to_bytes(2, byteorder='little'))
+            crc = self.calculate_crc16(message_bytes[2:])  # 从ID开始计算
+            crc_bytes = crc.to_bytes(2, byteorder='little')
+            message_bytes.extend(crc_bytes)
+            log_debug(f"添加CRC校验: {crc_bytes.hex(' ').upper()}")
 
             # 添加报文尾
             message_bytes.extend(end_bytes_value)
+            log_debug(f"添加报文尾: {end_bytes_value.hex(' ').upper()}")
 
-            # 打印完整报文
+            # 打印报文结构和完整报文
+            log_debug("\n最终报文结构:")
+            if length_bytes == 1:
+                data_start = 4
+                log_debug(f"报文头(2字节): {message_bytes[0:2].hex(' ').upper()}")
+                log_debug(f"报文ID(1字节): {message_bytes[2:3].hex(' ').upper()}")
+                log_debug(f"长度字段(1字节): {message_bytes[3:4].hex(' ').upper()} (十进制: {message_bytes[3]})")
+            else:
+                data_start = 5
+                log_debug(f"报文头(2字节): {message_bytes[0:2].hex(' ').upper()}")
+                log_debug(f"报文ID(1字节): {message_bytes[2:3].hex(' ').upper()}")
+                log_debug(
+                    f"长度字段(2字节): {message_bytes[3:5].hex(' ').upper()} (十进制: {message_bytes[3] + (message_bytes[4] << 8)})")
+
+            data_end = len(message_bytes) - 4  # 减去CRC和报文尾
+            log_debug(f"数据部分({data_end - data_start}字节): {len(message_bytes[data_start:data_end])} 字节")
+            log_debug(f"CRC校验(2字节): {message_bytes[data_end:data_end + 2].hex(' ').upper()}")
+            log_debug(f"报文尾(2字节): {message_bytes[data_end + 2:].hex(' ').upper()}")
+
             log_debug("\n完整报文:")
             hex_message = ' '.join([f'{b:02X}' for b in message_bytes])
             log_debug(f"  {hex_message}")
+            log_debug(f"完整报文长度: {len(message_bytes)} 字节")
             log_debug("====================================\n")
 
             return bytes(message_bytes)
@@ -280,7 +347,7 @@ class ProtocolParser(QObject):
         except Exception as e:
             log_debug(f"生成报文错误: {str(e)}")
             import traceback
-            traceback.log_debug_exc()  # 打印完整的异常堆栈跟踪，以便更好地调试
+            traceback.print_exc()  # 打印完整的异常堆栈跟踪，以便更好地调试
             log_debug("====================================\n")
             return None
 
