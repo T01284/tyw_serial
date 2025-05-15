@@ -35,7 +35,7 @@ class LogManager:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, log_dir='logs', file_name=None, console_level='INFO', file_level='DEBUG',
+    def __init__(self, log_dir='logs', file_name=None, console_level='DEBUG', file_level='DEBUG',
                  max_size=10 * 1024 * 1024, backup_count=10):
         """
         初始化日志管理器
