@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 架构修改
+@Author     : 王舒
 @Company    : 黑龙江天有为科技有限公司
 @Date       : 2025-05-13
 @Python     : 3.10

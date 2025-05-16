@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 架构修改
+@Author     : 王舒
 @Company    : 黑龙江天有为科技有限公司
 @Date       : 2025-05-10
 @Python     : 3.10
@@ -267,7 +267,7 @@ class ProtocolUIGenerator:
             new_field_id = f"{protocol_id}_{original_field_id}"
 
             # 输出字段ID映射，用于调试
-            log_debug(f"字段ID映射: {original_field_id} -> {new_field_id}")
+            #log_debug(f"字段ID映射: {original_field_id} -> {new_field_id}")
 
             # 更新字段信息中的ID（复制一份以避免修改原始数据）
             field_info = field.copy()
