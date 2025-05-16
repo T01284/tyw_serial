@@ -195,8 +195,8 @@ class ProtocolParser(QObject):
             crc_data = message_bytes[len(start_bytes):data_end]
             crc = self.calculate_crc16(crc_data)
             crc_pos = data_end
-            message_bytes[crc_pos] = crc & 0xFF  # 低字节
-            message_bytes[crc_pos + 1] = (crc >> 8) & 0xFF  # 高字节
+            message_bytes[crc_pos] = (crc >> 8) & 0xFF  # 高字节
+            message_bytes[crc_pos + 1] = crc & 0xFF  # 低字节
 
             # 7. 填充报文尾
             for i, b in enumerate(end_bytes):
