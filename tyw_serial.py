@@ -1700,6 +1700,14 @@ class SerialToolUI(QMainWindow):
             message (str): 日志消息内容
             message_type (str): 消息类型（"send"/"receive"/"system"/"error"）
         """
+        # 检查日志条数，如果超过500条则清空
+        current_text = self.log_display.toPlainText()
+        line_count = current_text.count('\n') + 1
+        if line_count > 500:
+            self.log_display.clear()
+            self.add_log_message("日志超过500条，已自动清空", "system")
+            # 递归调用结束后直接返回，避免重复添加当前消息
+            return
         # 获取当前光标
         cursor = self.log_display.textCursor()
 
