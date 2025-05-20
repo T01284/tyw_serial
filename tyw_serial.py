@@ -1083,6 +1083,13 @@ class SerialToolUI(QMainWindow):
         self.auto_scroll.setChecked(True)
         log_control_layout.addWidget(self.auto_scroll)
 
+        # 添加协议解析选项
+        self.enable_protocol_parse = QCheckBox("协议解析")
+        self.enable_protocol_parse.setChecked(False)
+        self.enable_protocol_parse.stateChanged.connect(self.toggle_protocol_parse)
+        log_control_layout.addWidget(self.enable_protocol_parse)
+
+
         # 清空日志按钮
         self.clear_log_btn = QPushButton("清空日志")
         self.clear_log_btn.clicked.connect(self.clear_log)
@@ -1176,6 +1183,18 @@ class SerialToolUI(QMainWindow):
         else:
             self.serial_port_combo.addItem("无可用串口")
 
+    def toggle_protocol_parse(self, state):
+        """
+        切换协议解析状态
+
+        Args:
+            state (int): 复选框状态 (Qt.Checked/Qt.Unchecked)
+        """
+        is_enabled = state == Qt.Checked
+        if is_enabled:
+            self.add_log_message("已启用协议解析功能", "system")
+        else:
+            self.add_log_message("已禁用协议解析功能", "system")
 
     def open_serial(self):
         """打开串口"""
@@ -1552,8 +1571,10 @@ class SerialToolUI(QMainWindow):
         except Exception as e:
             self.add_log_message(f"处理接收数据错误: {str(e)}", "error")
 
-        # 交给报文接收器处理
-        self.message_receiver.process_data(data)
+        # 根据协议解析开关状态决定是否解析数据
+        if self.enable_protocol_parse.isChecked():
+            # 交给报文接收器处理
+            self.message_receiver.process_data(data)
 
 
     def on_message_received(self, message):
