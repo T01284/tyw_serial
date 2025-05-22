@@ -920,7 +920,8 @@ class SerialToolUI(QMainWindow):
         # 创建状态栏
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-
+        self.aboutLabel = QLabel("本程序为内部使用,如在使用中遇到问题请联系 T01284   ")
+        self.statusBar.addPermanentWidget(self.aboutLabel)
         # 在状态栏添加串口状态信息
         self.statusLabel = QLabel("串口: 未连接")
         self.statusBar.addPermanentWidget(self.statusLabel)
