@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 王舒
-@Company    : 黑龙江天有为科技有限公司
+@Author     : T01284
 @Date       : 2025-05-10
 @Python     : 3.10
 @Description: 报文解析模块，负责解析各种协议报文

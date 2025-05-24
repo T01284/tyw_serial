@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 王舒
-@Company    : 黑龙江天有为科技有限公司
+@Author     : T01284
 @Date       : 2025-05-10
 @Python     : 3.10
 @Description: 配置文件解析模块，负责解析INI配置和JSON协议文件，增加JSON校验功能

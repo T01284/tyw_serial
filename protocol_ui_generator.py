@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@Author     : 王舒
-@Company    : 黑龙江天有为科技有限公司
+@Author     : T01284
 @Date       : 2025-05-10
 @Python     : 3.10
 @Description: 协议界面生成模块，根据JSON协议文件自动生成界面元素
