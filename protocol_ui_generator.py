@@ -55,7 +55,7 @@ class FieldInputWidget(QWidget):
         self.input_widget.setFixedHeight(24)  # 固定高度
 
         # 添加16进制验证器，只允许输入16进制数值
-        hex_regex = QRegExp("^0x[0-9A-Fa-f]+$|^[0-9A-Fa-f]+$")
+        hex_regex = QRegExp("^-?0x[0-9A-Fa-f]+$|^-?[0-9A-Fa-f]+$")
         hex_validator = QRegExpValidator(hex_regex, self)
         self.input_widget.setValidator(hex_validator)
 
