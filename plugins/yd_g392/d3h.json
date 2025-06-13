@@ -382,6 +382,78 @@
       ]
     },
     {
+      "name": "与BMS_0通讯状态",
+      "id": "B5[0:1]",
+      "byte_position": 5,
+      "bit_position": [0,1],
+      "type": "Unsigned",
+      "length": 1,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 3,
+      "min_hex": "0x0",
+      "max_hex": "0x3",
+      "default_hex": "0x0",
+      "invalid_hex": "0x0",
+      "description": "与BMS_0通讯状态",
+      "values": [
+        {"value": "0x0", "description": "通讯正常"},
+        {"value": "0x1", "description": "通讯丢失"},
+        {"value": "0x2", "description": "Reserved"},
+        {"value": "0x3", "description": "void"}
+      ]
+    },
+    {
+      "name": "与MCU通讯状态",
+      "id": "B5[2:3]",
+      "byte_position": 5,
+      "bit_position": [2,3],
+      "type": "Unsigned",
+      "length": 1,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 3,
+      "min_hex": "0x0",
+      "max_hex": "0x3",
+      "default_hex": "0x0",
+      "invalid_hex": "0x0",
+      "description": "与MCU通讯状态",
+      "values": [
+        {"value": "0x0", "description": "通讯正常"},
+        {"value": "0x1", "description": "通讯丢失"},
+        {"value": "0x2", "description": "Reserved"},
+        {"value": "0x3", "description": "void"}
+      ]
+    },
+    {
+      "name": "与IOT通讯状态",
+      "id": "B5[4:5]",
+      "byte_position": 5,
+      "bit_position": [4,5],
+      "type": "Unsigned",
+      "length": 1,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 3,
+      "min_hex": "0x0",
+      "max_hex": "0x3",
+      "default_hex": "0x0",
+      "invalid_hex": "0x0",
+      "description": "与IOT通讯状态",
+      "values": [
+        {"value": "0x0", "description": "通讯正常"},
+        {"value": "0x1", "description": "通讯丢失"},
+        {"value": "0x2", "description": "Reserved"},
+        {"value": "0x3", "description": "void"}
+      ]
+    },
+    {
       "name": "IOT工作状态",
       "id": "B4[0:1]",
       "byte_position": 4,
@@ -497,24 +569,7 @@
         {"value": "0x3", "description": "自动调节"}
       ]
     },
-    {
-      "name": "ALM工作温度",
-      "id": "B5",
-      "byte_position": 5,
-      "bit_position": null,
-      "type": "Unsigned",
-      "length": 1,
-      "precision": 1,
-      "offset": -40,
-      "unit": "℃",
-      "min_value": -40,
-      "max_value": 215,
-      "min_hex": "0x0",
-      "max_hex": "0xFF",
-      "default_hex": "0x0",
-      "invalid_hex": "0xFF",
-      "description": "ALM工作温度"
-    },
+
     {
       "name": "整车工作电压",
       "id": "B6:B7",
@@ -715,6 +770,52 @@
         {"value": "0x1", "description": "一级故障"},
         {"value": "0x2", "description": "二级故障"},
         {"value": "0x3", "description": "三级故障"}
+      ]
+    },
+    {
+      "name": "边撑开关状态",
+      "id": "B9[6:7]",
+      "byte_position": 9,
+      "bit_position": [6, 7],
+      "type": "Unsigned",
+      "length": 2,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 3,
+      "min_hex": "0x0",
+      "max_hex": "0x3",
+      "default_hex": "0x0",
+      "invalid_hex": "0x3",
+      "description": "边撑开关状态",
+      "values": [
+        {"value": "0x0", "description": "Invalid（边撑收起）"},
+        {"value": "0x1", "description": "Valid（边撑放下）"},
+        {"value": "0x2", "description": "Reserved"},
+        {"value": "0x3", "description": "void"}
+      ]
+    },
+    {
+      "name": "自动大灯功能设置指令",
+      "id": "B17[0,1]",
+      "byte_position": 17,
+      "bit_position": [0,1],
+      "type": "Unsigned",
+      "length": 2,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 1,
+      "min_hex": "0x0",
+      "max_hex": "0x1",
+      "default_hex": "0x0",
+      "invalid_hex": "0x1",
+      "description": "自动大灯功能设置指令",
+      "values": [
+        {"value": "0x0", "description": "关闭"},
+        {"value": "0x1", "description": "开启"}
       ]
     },
     {
@@ -1130,6 +1231,34 @@
         {"value": "0x1", "description": "进P"},
         {"value": "0x2", "description": "开机解P(仅支持支付宝等第三方开机解P要求)"},
         {"value": "0x3", "description": "void"}
+      ]
+    },
+    {
+      "name": "电子座桶锁状态",
+      "id": "B4[0:2]",
+      "byte_position": 4,
+      "bit_position": [0, 7],
+      "type": "Unsigned",
+      "length": 3,
+      "precision": 1,
+      "offset": 0,
+      "unit": "-",
+      "min_value": 0,
+      "max_value": 7,
+      "min_hex": "0x0",
+      "max_hex": "0x7",
+      "default_hex": "0x0",
+      "invalid_hex": "0x7",
+      "description": "电子座桶锁状态",
+      "values": [
+        {"value": "0x0", "description": "Locked"},
+        {"value": "0x1", "description": "Unlocked"},
+        {"value": "0x2", "description": "Locking"},
+        {"value": "0x3", "description": "Unlocking"},
+        {"value": "0x4", "description": "Reserved"},
+        {"value": "0x5", "description": "Reserved"},
+        {"value": "0x6", "description": "Reserved"},
+        {"value": "0x7", "description": "void"}
       ]
     }
   ],

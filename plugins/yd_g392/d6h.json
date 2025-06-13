@@ -137,30 +137,7 @@
       "invalid_hex": "0xFF",
       "description": "电池最低温度"
     },
-    {
-      "name": "高温报警（热失控）",
-      "id": "B36[2:3]",
-      "byte_position": 36,
-      "bit_position": [2, 3],
-      "type": "Unsigned",
-      "length": 1,
-      "precision": 1,
-      "offset": 0,
-      "unit": "-",
-      "min_value": 0,
-      "max_value": 3,
-      "min_hex": "0x0",
-      "max_hex": "0x3",
-      "default_hex": "0x3",
-      "invalid_hex": "0x3",
-      "description": "高温报警（热失控）",
-      "values": [
-        {"value": "0x0", "description": "无效"},
-        {"value": "0x1", "description": "有效"},
-        {"value": "0x2", "description": "Reserved"},
-        {"value": "0x3", "description": "void"}
-      ]
-    },
+
     {
       "name": "电池充电互认结果",
       "id": "B36[4:5]",

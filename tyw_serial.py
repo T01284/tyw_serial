@@ -21,7 +21,7 @@ from PyQt5.QtGui import QColor, QBrush, QTextCharFormat, QFont, QIcon
 import serial
 import serial.tools.list_ports
 from log_manager import LogManager, log_debug, log_info, log_error, log_exception
-
+import configparser
 # 自定义配置日志管理器(可选)
 LogManager(log_dir='logs', file_name='tyw_serial.log', console_level='DEBUG', file_level='DEBUG')
 # 导入自定义模块
@@ -91,15 +91,15 @@ class TimedMessagesManager(QWidget):
         button_layout = QHBoxLayout()
         layout.addLayout(button_layout)
 
-        # 添加报文按钮
-        self.add_button = QPushButton("添加报文")
-        self.add_button.clicked.connect(self.add_message)
-        button_layout.addWidget(self.add_button)
-
-        # 导入协议报文按钮
-        self.import_button = QPushButton("导入协议报文")
-        self.import_button.clicked.connect(self.import_from_protocol)
-        button_layout.addWidget(self.import_button)
+        # # 添加报文按钮
+        # self.add_button = QPushButton("添加报文")
+        # self.add_button.clicked.connect(self.add_message)
+        # button_layout.addWidget(self.add_button)
+        #
+        # # 导入协议报文按钮
+        # self.import_button = QPushButton("导入协议报文")
+        # self.import_button.clicked.connect(self.import_from_protocol)
+        # button_layout.addWidget(self.import_button)
 
         # 全部启用/禁用按钮
         self.enable_all_button = QPushButton("全部启用")
